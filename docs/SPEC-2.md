@@ -44,6 +44,21 @@ class PendingActionStore(Protocol):
 
 No añadas más puertos. Cualquier otra interfaz con una sola implementación y sin segunda previsible es generalidad especulativa.
 
+## 3.1 Rutas reservadas
+
+La SPEC 1 fija la estructura hexagonal del backend y deja huecos reservados para esta spec (ver SPEC-1 sección 6). Esta tabla es la única fuente de verdad sobre dónde vive cada módulo nuevo; se decide una sola vez, aquí:
+
+| Módulo conceptual | Ruta final |
+|---|---|
+| `LLMClient`, `PendingActionStore` (protocolos) | `app/domain/ports/llm.py` |
+| Orquestador, prompts, schemas de tools | `app/application/agent/orchestrator.py`, `app/application/agent/prompts.py`, `app/application/agent/tool_schemas.py` |
+| Adaptadores del LLM | `app/infrastructure/llm/anthropic.py`, `app/infrastructure/llm/scripted.py`, `app/infrastructure/llm/pricing.py` |
+| Acciones pendientes (adaptador en memoria) | `app/infrastructure/pending/memory.py` |
+| Endpoints HTTP | `app/api/routes/chat.py`, `app/api/routes/confirm.py` |
+| Frontend | `frontend/src/features/chat/**` |
+
+Donde el resto de esta spec se refiera a un módulo por su nombre corto (`agent/prompts.py`, `agent/llm.py`, `agent/orchestrator.py`, `agent/pending.py`, `main.py`), es una abreviatura del módulo conceptual; la ruta real dentro del árbol hexagonal es la de esta tabla.
+
 ## 4. Prompts (`agent/prompts.py`)
 
 Política declarativa. Las reglas duras viven en `policy.py`; esto solo alinea al modelo.
@@ -91,6 +106,20 @@ En `update_order_status`, el campo `reason` se describe como: *"Motivo del cambi
 
 Los enums se **derivan** de `VALID_STATUSES` en `constants.py`. Una sola fuente de verdad; no dupliques listas a mano.
 
+## 4.1 Versionado de prompts
+
+```python
+PROMPT_VERSION = "2026-08-26.1"   # app/application/agent/prompts.py
+```
+
+Un string, no una estructura: cambia cada vez que cambia `SYSTEM_PROMPT` o una descripción de `tool_schemas.py` de forma observable para el modelo.
+
+Se incluye en:
+- todo evento `llm_call` del logging (extiende la observabilidad de la SPEC 1)
+- el reporte que genera `backend/evals/run.py` (sección 11.1)
+
+Responde una sola pregunta, pero la correcta: *"¿qué versión del prompt produjo esta respuesta?"*. Sin esto, comparar métricas de eval antes y después de tocar el prompt es un ejercicio de memoria, no de datos.
+
 ## 5. Cliente LLM (`agent/llm.py`)
 
 **`AnthropicClient`** — envuelve el SDK oficial:
@@ -107,6 +136,18 @@ Los enums se **derivan** de `VALID_STATUSES` en `constants.py`. Una sola fuente 
 - **Respeta el mismo contrato**: devuelve bloques `tool_use` reales que pasan por la política igual que los del modelo real. No es un atajo que salta el pipeline; es un modelo falso enchufado en el mismo sitio
 
 > `DEMO_MODE` es una decisión de producto deliberada: permite evaluar el sistema sin credenciales ni costo. Documéntala en el README como tal, no como un hack de testing.
+
+## 5.1 Contabilidad de costos (`app/infrastructure/llm/pricing.py`)
+
+Tabla de precios por modelo y una función pura:
+
+```python
+def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> Decimal:
+    """Looks up the per-model price table and returns cost in USD as Decimal —
+    never float, for the same reason money columns are Decimal in SPEC 1."""
+```
+
+Cada turno loguea `cost_usd` en el evento `llm_call`, junto a `input_tokens`, `output_tokens`, `latency_ms` y `PROMPT_VERSION` (sección 4.1). Las cifras de costo del README (sección 12) salen de estos logs, no de una estimación hecha a mano — la misma disciplina que exige cifras *medidas* para latencia y tokens.
 
 ## 6. Orquestador (`agent/orchestrator.py`) — capa de RAZONAMIENTO
 
@@ -215,6 +256,29 @@ Un solo componente de chat. Sin librerías de UI, CSS plano. Limpio y funcional;
 
 > El punto 5 cuesta tres líneas y es de los que más rinden en la demo: el evaluador ve el `trace_id` en pantalla, tú abres los logs y reconstruyes esa respuesta exacta delante de él.
 
+## 9.1 Arquitectura y convenciones del frontend (decididas aquí, no se re-discuten en la implementación)
+
+**Estructura por feature con interior hexagonal.** `features/chat/{domain,infrastructure,application,ui}/`, con `index.ts` como único punto de entrada público de la feature. Nada fuera de `chat/` importa una ruta interna de `chat/` — solo su `index.ts`.
+
+**Convención de componentes.** Cada componente vive en su propia carpeta: `index.ts` (re-export), `Component.tsx`, `Component.types.ts`, `Component.constants.ts`, `Component.test.tsx`. El JSX siempre en `.tsx`. Ningún componente supera ~80 líneas; si crece más, se descompone.
+
+**Reglas de frontera de ESLint** (`eslint.config.js`, ya instalado en la SPEC 1):
+- `features/*/ui/` no puede importar de `features/*/infrastructure/` ni de `@tanstack/react-query` — la UI no habla con la red ni con el cache directamente, solo con hooks de `application/`
+- `shared/` no puede importar de `features/` — la dependencia va siempre feature → shared, nunca al revés
+- nadie importa una ruta interna de otra feature; solo su `index.ts`
+
+**TanStack Query es dueño del ciclo de vida de las mutaciones.** Política de reintentos por operación (ver ADR 0006):
+- `sendMessage`: reintenta 2 veces con backoff
+- `confirmAction`: **0 reintentos, nunca** — un reintento tras una ejecución que sí ocurrió, pero cuya respuesta se perdió en la red, mostraría un error sobre una acción que sí tuvo efecto
+
+**Validación en el borde.** Zod valida cada respuesta del backend dentro del adaptador de la gateway, antes de que llegue a `application/`. `FakeChatGateway` satisface el mismo schema que el adaptador real, así un test que pasa contra el fake no puede estar validando una forma de datos que el backend real no produce.
+
+**Sin MSW.** `FakeChatGateway`, implementando el puerto `ChatGateway`, es el único doble de test (ver ADR 0007) — una sola estrategia de mocking, en la frontera que el diseño ya define, no dos compitiendo.
+
+**Estilos.** Tailwind. Las cadenas de clases repetidas o condicionales van a `*.constants.ts`, compuestas con `clsx` + `tailwind-merge` vía `shared/lib/cn.ts` — nunca condicionales de clases inline en el JSX.
+
+**Estados explícitos y accesibilidad.** Todo componente que dependa de red declara sus estados de carga, error y vacío — nunca un `undefined` implícito. Las peticiones usan `AbortController`, cancelado al desmontar y al cambiar de rol. La tarjeta de confirmación lleva `role` y `aria-live`; los inputs llevan `label`; el foco se gestiona explícitamente al abrir y cerrar la tarjeta; todo es alcanzable por teclado.
+
 ## 10. Variables de entorno añadidas
 
 ```bash
@@ -259,6 +323,22 @@ FRONTEND_ORIGIN=http://localhost:5173
 
 Todo corre con `docker compose exec backend pytest -v`.
 
+## 11.1 Suite de evaluación del agente (`backend/evals/`)
+
+Complementa a `tests/test_agent_behavior.py` — no lo reemplaza. Los tests de comportamiento verifican lógica determinista con `ScriptedClient`; la suite de evals mide al modelo real.
+
+`backend/evals/cases.yaml` — 15 casos, cada uno con: mensaje del usuario, rol, y el resultado esperado (qué tool debería elegir, o que debería rehusarse, o que debería pedir una aclaración).
+
+`backend/evals/run.py` — corre los 15 casos contra el modelo real (requiere `ANTHROPIC_API_KEY`, `DEMO_MODE=false`) y reporta:
+- precisión de selección de herramienta
+- tasa de rechazo correcto
+- latencia mediana
+- costo total (vía `pricing.py`, sección 5.1)
+
+`make eval` lo lanza. **No corre en CI**: cuesta dinero y necesita red. El resultado se pega en el README (sección 12) como texto, no como una afirmación sin evidencia.
+
+Justificación: cualquiera puede decir que su agente funciona. Un número que se puede volver a medir después de cambiar un prompt — y que queda etiquetado con el `PROMPT_VERSION` que lo produjo (sección 4.1) — es una afirmación de otra categoría.
+
 ## 12. Documentación
 
 **`README.md`:**
@@ -270,7 +350,7 @@ Todo corre con `docker compose exec backend pytest -v`.
 ## Decisiones técnicas
    - Por qué la confirmación es fuera de banda y no conversacional
    - Por qué el modelo solo ve las tools de su rol, y por qué aun así se revalida
-   - Por qué SQLite en lugar de PostgreSQL
+   - Por qué PostgreSQL en lugar de SQLite (ver ADR 0001)
    - Por qué existe DEMO_MODE
    - Por qué el dominio es inglés y la presentación español
    - Trade-offs de modelo: costo y latencia (con números MEDIDOS)
