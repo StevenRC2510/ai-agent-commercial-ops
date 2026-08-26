@@ -279,7 +279,7 @@ def get_client_balance(db: Session, client_id: int) -> dict:
     balance = total_ordered - total_paid.
     exceeds_credit_limit = balance > credit_limit.
     Cancelled orders are excluded from total_ordered.
-    Raises ClientNotFound."""
+    Raises ClientNotFoundError."""
 
 
 def update_order_status(
@@ -291,14 +291,14 @@ def update_order_status(
     displayed_summary=None (SPEC 2 fills it from presentation.render_summary()
     once /confirm exists).
     Returns {"order_id", "previous_status", "new_status", "audit_id"}.
-    Raises OrderNotFound or InvalidTransition."""
+    Raises OrderNotFoundError or InvalidTransitionError."""
 ```
 
 Por qué el recorte de `limit` no vive aquí: antes `tools.py` recortaba `limit` a 200 dentro de la función. Ahora ese recorte vive exclusivamente en el schema de `policy.py` (sección 11) — si `tools.py` también recortara, podría auditarse un `limit` distinto del que realmente se ejecuta. Un solo punto de normalización, y `safe_args` deja de mentir.
 
 Transversal:
 
-- Excepciones de dominio propias en `errors.py`: `ClientNotFound`, `OrderNotFound`, `InvalidTransition`. Nunca excepciones genéricas hacia arriba
+- Excepciones de dominio propias en `errors.py`: `ClientNotFoundError`, `OrderNotFoundError`, `InvalidTransitionError`. Nunca excepciones genéricas hacia arriba
 - Todas las consultas parametrizadas vía el ORM. **Cero SQL construido por concatenación de strings, en ningún punto del proyecto**
 - La escritura y su `AuditLog` son atómicas: o se guardan las dos, o ninguna (esta es tu respuesta concreta cuando pregunten por ACID)
 
@@ -545,7 +545,7 @@ Requisitos: el `Dockerfile` del backend no corre como root · `requirements.txt`
 - `balance` = `total_ordered` − `total_paid`, excluyendo canceladas
 - cliente sobrepagado → `balance` negativo, sin excepción
 - `exceeds_credit_limit` es `True` exactamente cuando `balance > credit_limit`
-- `get_client_balance` de cliente inexistente → `ClientNotFound`
+- `get_client_balance` de cliente inexistente → `ClientNotFoundError`
 - `update_order_status` cambia el estado y crea **exactamente un** `AuditLog`, con `displayed_summary=None`
 - transición inválida → **no** cambia el estado y **no** crea `AuditLog` con `outcome="executed"`
 - si falla a mitad, la transacción revierte por completo
