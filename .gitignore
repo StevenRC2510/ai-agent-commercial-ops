@@ -1,0 +1,6 @@
+.env
+__pycache__/
+node_modules/
+backend/data/*.db
+.pytest_cache/
+.coverage
