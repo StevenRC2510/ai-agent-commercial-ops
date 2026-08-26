@@ -450,7 +450,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app_db}"]
       interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 10
+      start_period: 5s
     # No "ports:" — the database is not exposed to the host, only to the compose network.
 
   backend:
@@ -488,17 +489,22 @@ Nótese que ningún servicio delega en un archivo de variables de entorno extern
 `.env.example`, con un comentario por variable:
 
 ```bash
+# Copy to .env to override. Not required to boot: every variable here is
+# non-secret and has a working default.
+#
+# Secrets policy: a value may have a default ONLY if it is not a secret.
+# SPEC 1 has none. SPEC 2 introduces ANTHROPIC_API_KEY, which must have no
+# default and must fail loudly when missing.
+
 # --- Database (local development credentials only) ---
 POSTGRES_USER=app
-POSTGRES_PASSWORD=app_password
+POSTGRES_PASSWORD=app_password        # override in any shared environment
 POSTGRES_DB=app_db
 DATABASE_URL=postgresql+psycopg://app:app_password@db:5432/app_db
 
-# --- Observability ---
+# --- Behaviour ---
 LOG_LEVEL=INFO
-SEED_ANCHOR_DATE=            # empty = current date; pin it for reproducible tests
-
-# --- CORS ---
+SEED_ANCHOR_DATE=            # empty = current date; pin it for reproducible data
 FRONTEND_ORIGIN=http://localhost:5173
 ```
 
