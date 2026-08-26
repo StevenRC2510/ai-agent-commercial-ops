@@ -1,0 +1,73 @@
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        files: ^frontend/
+
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.17.0
+    hooks:
+      - id: eslint
+        args: [--fix]
+        files: ^frontend/src/.*\.tsx?$
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.22.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/alessandrojcm/commitlint-pre-commit-hook
+    rev: v9.20.0
+    hooks:
+      - id: commitlint
+        stages: [commit-msg]
+        additional_dependencies: ["@commitlint/config-conventional"]
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: >-
+          bash -c "docker compose ps --status running --services 2>/dev/null | grep -qx backend
+          || { echo 'The stack is not running. Start it with: make up'; exit 1; };
+          docker compose exec -T backend pytest -q"
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: vitest
+        name: vitest
+        entry: >-
+          bash -c "if [ -d frontend ]; then cd frontend && npm run test -- --run;
+          else echo 'frontend/ not present yet — skipping vitest'; fi"
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: tsc
+        name: tsc --noEmit
+        entry: >-
+          bash -c "if [ -d frontend ]; then cd frontend && npx tsc --noEmit;
+          else echo 'frontend/ not present yet — skipping tsc'; fi"
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
