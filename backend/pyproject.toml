@@ -21,8 +21,3 @@ no_implicit_optional = true
 # correctness depends on; adapters are thin and mostly typed by the frameworks they wrap.
 module = ["app.domain.*", "app.application.*"]
 disallow_untyped_defs = true
-
-[[tool.mypy.overrides]]
-# Temporary: app.infrastructure.db arrives in Task 5, which removes this override.
-module = ["app.infrastructure.db"]
-ignore_missing_imports = true

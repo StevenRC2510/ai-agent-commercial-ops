@@ -9,11 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import health
 from app.config import settings
 from app.infrastructure import obs
+from app.infrastructure.db import create_schema
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     obs.configure_logging()
+    create_schema()
     obs.log(obs.new_trace_id(), "app_start")
     yield
 

@@ -1,8 +1,11 @@
 """Liveness and readiness probes."""
 
 from fastapi import APIRouter, Response, status
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.schemas import HealthResponse, ReadyResponse
+from app.infrastructure.db import engine
 
 router = APIRouter(tags=["health"])
 
@@ -10,15 +13,10 @@ router = APIRouter(tags=["health"])
 def check_database() -> bool:
     """Return True when the database answers. Overridden in tests."""
     try:
-        from sqlalchemy import text
-
-        from app.infrastructure.db import engine
-
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         return True
-    except Exception:
-        # Also covers ModuleNotFoundError before Task 5 adds app.infrastructure.db.
+    except SQLAlchemyError:
         return False
 
 
