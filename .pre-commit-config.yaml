@@ -49,9 +49,7 @@ repos:
       - id: pytest
         name: pytest
         entry: >-
-          bash -c "docker compose ps --status running --services 2>/dev/null | grep -qx backend
-          || { echo 'The stack is not running. Start it with: make up'; exit 1; };
-          docker compose exec -T backend pytest -q"
+          bash -c "docker compose up --build -d --wait && docker compose exec -T backend pytest -q"
         language: system
         pass_filenames: false
         stages: [pre-push]

@@ -457,11 +457,16 @@ services:
   backend:
     build: ./backend
     ports: ["8000:8000"]
+    # Mounts shadow the image's baked-in copy so the container always runs the working tree.
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app_password@db:5432/app_db}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      PYTHONDONTWRITEBYTECODE: "1"      # keep the container from writing .pyc into the host tree
     depends_on:
       db: { condition: service_healthy }
     healthcheck:
@@ -485,6 +490,8 @@ volumes:
 ```
 
 Nótese que ningún servicio delega en un archivo de variables de entorno externo: todo llega vía `environment:` con `${VAR:-default}`, así `docker compose up --build` funciona en un clon limpio sin `.env`. El healthcheck de `backend` sigue usando `/health`, no `/ready` (sección 6): un corte momentáneo de Postgres no debe reiniciar el backend en bucle.
+
+Los volúmenes de `backend` montan `app/` y `tests/` del host sobre la copia horneada en la imagen: así el contenedor siempre ejecuta el árbol de trabajo, sin necesidad de reconstruir la imagen en cada cambio de código. La imagen sigue conteniendo `app/` y `tests/` vía `COPY` en el `Dockerfile` — el montaje solo los oculta en desarrollo — para que siga siendo ejecutable de forma autónoma. `PYTHONDONTWRITEBYTECODE=1` evita que el intérprete 3.11 del contenedor escriba `.pyc` incompatibles en un árbol que también usa un venv de host en otra versión de Python.
 
 `.env.example`, con un comentario por variable:
 

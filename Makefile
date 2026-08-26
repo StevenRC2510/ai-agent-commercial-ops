@@ -1,16 +1,17 @@
-.PHONY: up down test lint format check eval _require-stack
+.PHONY: up down test lint format check eval _sync
 
+# Rebuilds the image: needed after changing requirements.txt or the Dockerfile.
 up:
-	docker compose up --build -d
+	docker compose up --build -d --wait
+
+# Starts the stack without rebuilding: app/tests are bind-mounted, so code is always fresh.
+_sync:
+	docker compose up -d --wait
 
 down:
 	docker compose down -v
 
-_require-stack:
-	@docker compose ps --status running --services 2>/dev/null | grep -qx backend \
-		|| { echo "The stack is not running. Start it with: make up"; exit 1; }
-
-test: _require-stack
+test: _sync
 	docker compose exec -T backend pytest -v
 	@if [ -d frontend ]; then \
 		cd frontend && npm run test -- --run; \
@@ -18,7 +19,7 @@ test: _require-stack
 		echo "frontend/ not present yet — skipping frontend tests"; \
 	fi
 
-lint: _require-stack
+lint: _sync
 	docker compose exec -T backend ruff check app tests
 	docker compose exec -T backend ruff format --check app tests
 	docker compose exec -T backend mypy app
@@ -28,7 +29,7 @@ lint: _require-stack
 		echo "frontend/ not present yet — skipping frontend lint"; \
 	fi
 
-format: _require-stack
+format: _sync
 	docker compose exec -T backend ruff check --fix app tests
 	docker compose exec -T backend ruff format app tests
 	@if [ -d frontend ]; then \

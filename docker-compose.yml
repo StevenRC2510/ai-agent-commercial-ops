@@ -18,11 +18,16 @@ services:
   backend:
     build: ./backend
     ports: ["8000:8000"]
+    # Mounts shadow the image's baked-in copy so the container always runs the working tree.
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app_password@db:5432/app_db}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      PYTHONDONTWRITEBYTECODE: "1"      # keep the container from writing .pyc into the host tree
     depends_on:
       db:
         condition: service_healthy
