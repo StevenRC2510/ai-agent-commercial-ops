@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    # Port 5432 is deliberately not published: reachable only inside the network.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_password}
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app_db}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  backend:
+    build: ./backend
+    ports: ["8000:8000"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app_password@db:5432/app_db}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # Liveness, not readiness: a database blip must not restart the backend.
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  pgdata:
