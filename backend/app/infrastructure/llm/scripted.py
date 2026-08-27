@@ -12,7 +12,6 @@ class RecordedCall:
     system: str
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]]
-    model: str | None
 
 
 class ScriptExhaustedError(RuntimeError):
@@ -32,9 +31,8 @@ class ScriptedClient:
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        model: str | None = None,
     ) -> LLMResponse:
-        self.calls.append(RecordedCall(system=system, messages=messages, tools=tools, model=model))
+        self.calls.append(RecordedCall(system=system, messages=messages, tools=tools))
         if not self._responses:
             raise ScriptExhaustedError("script ran out of responses — the caller looped too far")
         entry = self._responses.pop(0)

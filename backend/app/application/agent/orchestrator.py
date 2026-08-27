@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.application import policy, presentation, tools
 from app.application.agent.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from app.application.agent.tool_schemas import tool_schemas_for
-from app.application.constants import PERSONAL_FIELDS
+from app.application.constants import PERSONAL_FIELDS, ZERO_COST
 from app.application.messages import (
     FALLBACK_BUDGET_EXCEEDED,
     FALLBACK_INPUT_TOO_LONG,
@@ -25,7 +25,7 @@ from app.application.messages import (
 )
 from app.application.pending import PendingAction
 from app.application.permissions import ToolName
-from app.application.ports import LLMClient, PendingActionStore
+from app.application.ports import LLMClient, LLMResponse, PendingActionStore
 from app.application.pricing import estimate_cost
 from app.application.session_memory import trim_history
 from app.application.tool_args import TOOL_SCHEMAS, GetClientBalanceArgs, GetSalesOrdersArgs
@@ -35,8 +35,6 @@ from app.domain.errors import DomainError
 
 LogFn = Callable[..., None]
 JSONValue = dict[str, "JSONValue"] | list["JSONValue"] | str | int | float | bool | None
-
-_ZERO_COST = Decimal("0.00")
 
 
 @dataclass(frozen=True)
@@ -56,6 +54,26 @@ class TurnResult:
     telemetry: dict[str, Any] | None = None
     # Only a final message carries it: a card awaits consent, an error already says `error`.
     reason_code: str | None = None
+
+
+@dataclass
+class _TurnCounters:
+    """Running totals of the turn, so every exit reports what was really spent, not zeros."""
+
+    latency_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    iterations: int = 0
+
+    def record(self, response: LLMResponse, latency_ms: int) -> None:
+        """Called once a model call came back, so `iterations` counts completed ones."""
+        self.latency_ms += latency_ms
+        self.input_tokens += response.input_tokens
+        self.output_tokens += response.output_tokens
+        self.iterations += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def wrap_untrusted(payload: dict[str, JSONValue]) -> str:
@@ -155,7 +173,7 @@ def run_turn(
     pending_store: PendingActionStore,
     log: LogFn,
     history: list[dict[str, Any]] | None = None,
-    already_spent: Decimal = _ZERO_COST,
+    already_spent: Decimal = ZERO_COST,
 ) -> TurnResult:
     """Runs one conversational turn: proposes tool calls, submits each to the policy.
 
@@ -164,18 +182,27 @@ def run_turn(
     trail silently stops existing. Neither failure should be possible to forget.
     """
     # What this turn spends, separate from what the session already spent. Never a default.
-    turn_cost = _ZERO_COST
+    turn_cost = ZERO_COST
+    counters = _TurnCounters()
     # Tool -> the refusal standing against it; an allowed call to that same tool clears it.
     standing_denials: dict[str, str] = {}
 
     if len(user_message) > settings.max_message_chars:
         return TurnResult(
-            type="error", text=FALLBACK_INPUT_TOO_LONG, trace_id=trace_id, cost_usd=turn_cost
+            type="error",
+            text=FALLBACK_INPUT_TOO_LONG,
+            trace_id=trace_id,
+            cost_usd=turn_cost,
+            telemetry=counters.snapshot(),
         )
 
     if already_spent > settings.max_cost_per_session_usd:
         return TurnResult(
-            type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id=trace_id, cost_usd=turn_cost
+            type="error",
+            text=FALLBACK_BUDGET_EXCEEDED,
+            trace_id=trace_id,
+            cost_usd=turn_cost,
+            telemetry=counters.snapshot(),
         )
 
     log(trace_id, "user_message", chars=len(user_message), sha8=_sha8(user_message))
@@ -185,11 +212,8 @@ def run_turn(
 
     system_prompt = SYSTEM_PROMPT.format(role=role, today=date.today().isoformat())
     declared_tools = tool_schemas_for(role)
-    total_input_tokens = 0
-    total_output_tokens = 0
-    total_latency_ms = 0
 
-    for iteration in range(settings.llm_max_iterations):
+    for _ in range(settings.llm_max_iterations):
         started = time.monotonic()
         try:
             response = llm.create(
@@ -200,12 +224,14 @@ def run_turn(
         except Exception as exc:
             log(trace_id, "llm_error", error=str(exc))
             return TurnResult(
-                type="error", text=FALLBACK_LLM_ERROR, trace_id=trace_id, cost_usd=turn_cost
+                type="error",
+                text=FALLBACK_LLM_ERROR,
+                trace_id=trace_id,
+                cost_usd=turn_cost,
+                telemetry=counters.snapshot(),
             )
         latency_ms = int((time.monotonic() - started) * 1000)
-        total_latency_ms += latency_ms
-        total_input_tokens += response.input_tokens
-        total_output_tokens += response.output_tokens
+        counters.record(response, latency_ms)
 
         call_cost = estimate_cost(response.model, response.input_tokens, response.output_tokens)
         turn_cost += call_cost
@@ -224,17 +250,16 @@ def run_turn(
 
         if already_spent + turn_cost > settings.max_cost_per_session_usd:
             return TurnResult(
-                type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id=trace_id, cost_usd=turn_cost
+                type="error",
+                text=FALLBACK_BUDGET_EXCEEDED,
+                trace_id=trace_id,
+                cost_usd=turn_cost,
+                telemetry=counters.snapshot(),
             )
 
         messages.append({"role": "assistant", "content": response.content})
 
-        telemetry = {
-            "latency_ms": total_latency_ms,
-            "input_tokens": total_input_tokens,
-            "output_tokens": total_output_tokens,
-            "iterations": iteration + 1,
-        }
+        telemetry = counters.snapshot()
 
         if response.stop_reason != "tool_use":
             return TurnResult(
@@ -321,5 +346,9 @@ def run_turn(
 
     log(trace_id, "max_iterations_reached")
     return TurnResult(
-        type="error", text=FALLBACK_MAX_ITERATIONS, trace_id=trace_id, cost_usd=turn_cost
+        type="error",
+        text=FALLBACK_MAX_ITERATIONS,
+        trace_id=trace_id,
+        cost_usd=turn_cost,
+        telemetry=counters.snapshot(),
     )

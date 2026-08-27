@@ -47,10 +47,9 @@ class RecordingClient:
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        model: str | None = None,
     ) -> LLMResponse:
         self._delivered.extend(_tool_result_texts(messages))
-        response = self._inner.create(system=system, messages=messages, tools=tools, model=model)
+        response = self._inner.create(system=system, messages=messages, tools=tools)
         self.input_tokens += response.input_tokens
         self.output_tokens += response.output_tokens
         self.model = response.model

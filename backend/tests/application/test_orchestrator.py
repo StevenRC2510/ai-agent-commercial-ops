@@ -24,6 +24,7 @@ from app.application.permissions import DenialReason, Role, ToolName
 from app.application.policy import PolicyDecision
 from app.application.ports import LLMResponse
 from app.application.pricing import estimate_cost
+from app.config import settings
 from app.domain.constants import OrderStatus
 from app.domain.models import AuditLog, Client, Order
 from app.infrastructure.llm.scripted import ScriptedClient
@@ -386,8 +387,38 @@ def test_the_budget_guard_fires_from_real_accumulated_cost(db, seeded):
         text=FALLBACK_BUDGET_EXCEEDED,
         trace_id="abc12345",
         cost_usd=Decimal("1.50"),  # the one call it did make, at $5/M output
+        telemetry={
+            "latency_ms": result.telemetry["latency_ms"] if result.telemetry else None,
+            "input_tokens": 0,
+            "output_tokens": 300_000,
+            "iterations": 1,
+        },
     )
     assert len(llm.calls) == 1
+
+
+def test_the_in_loop_budget_guard_reports_what_the_turn_already_spent(db, seeded):
+    """A turn stopped mid-loop was billed for the call it made; zeros would call it free."""
+    expensive = _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {}))
+    expensive = LLMResponse(
+        stop_reason=expensive.stop_reason,
+        content=expensive.content,
+        input_tokens=0,
+        output_tokens=300_000,
+        model="claude-haiku-4-5",
+    )
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=ScriptedClient([expensive]),
+        trace_id="abc12345",
+    )
+    assert result.telemetry is not None
+    assert result.telemetry["output_tokens"] == 300_000
+    assert result.telemetry["iterations"] == 1
 
 
 def test_a_failing_tool_returns_a_safe_message_never_a_stacktrace(db, seeded):
@@ -505,8 +536,12 @@ def test_a_completed_turn_reports_exactly_what_it_spent(db, seeded):
     assert result.cost_usd == _cost(10, 5)
 
 
-def test_a_guard_that_returns_before_any_model_call_reports_a_computed_zero(db, seeded):
-    result = _run(
+_NO_MODEL_RAN = {"latency_ms": 0, "input_tokens": 0, "output_tokens": 0, "iterations": 0}
+
+
+def _over_long_turn(db):
+    """Refused on length, before the model is ever reached."""
+    return _run(
         user_message="x" * 2001,
         role=Role.OPERATOR.value,
         actor="u-1",
@@ -515,11 +550,11 @@ def test_a_guard_that_returns_before_any_model_call_reports_a_computed_zero(db, 
         llm=ScriptedClient([]),
         trace_id="abc12345",
     )
-    assert result.cost_usd == Decimal("0.00")
 
 
-def test_the_budget_guard_bills_nothing_for_the_turn_it_refuses_to_start(db, seeded):
-    result = _run(
+def _exhausted_budget_turn(db):
+    """Refused on the pre-flight budget guard, also before any call."""
+    return _run(
         user_message="x",
         role=Role.OPERATOR.value,
         actor="u-1",
@@ -529,7 +564,23 @@ def test_the_budget_guard_bills_nothing_for_the_turn_it_refuses_to_start(db, see
         trace_id="abc12345",
         already_spent=Decimal("999.00"),
     )
-    assert result.cost_usd == Decimal("0.00")
+
+
+def test_a_guard_that_returns_before_any_model_call_reports_a_computed_zero(db, seeded):
+    assert _over_long_turn(db).cost_usd == Decimal("0.00")
+
+
+def test_the_budget_guard_bills_nothing_for_the_turn_it_refuses_to_start(db, seeded):
+    assert _exhausted_budget_turn(db).cost_usd == Decimal("0.00")
+
+
+def test_an_over_long_message_reports_zeros_because_no_model_ran(db, seeded):
+    """Zeros are the honest measurement here, exactly as /confirm reports them."""
+    assert _over_long_turn(db).telemetry == _NO_MODEL_RAN
+
+
+def test_the_preflight_budget_guard_reports_zeros_because_no_model_ran(db, seeded):
+    assert _exhausted_budget_turn(db).telemetry == _NO_MODEL_RAN
 
 
 def _confirmation_turn(db):
@@ -573,38 +624,63 @@ def test_a_confirmation_turn_reports_the_calls_it_paid_for(db, seeded):
     assert result.cost_usd == _cost(10, 5)
 
 
-def test_a_model_error_still_reports_the_calls_that_succeeded_before_it(db, seeded):
-    llm = ScriptedClient(
-        [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})), TimeoutError("simulated")]
-    )
-    result = _run(
+def _failing_turn(db, responses):
+    """One read proposal is executed per response, so each entry is a call really paid for."""
+    return _run(
         user_message="x",
         role=Role.OPERATOR.value,
         actor="u-1",
         session_id="s-1",
         db=db,
-        llm=llm,
+        llm=ScriptedClient(responses),
         trace_id="abc12345",
     )
+
+
+def _model_error_turn(db):
+    return _failing_turn(
+        db, [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})), TimeoutError("simulated")]
+    )
+
+
+def _iteration_cap_turn(db):
+    return _failing_turn(
+        db, [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})) for _ in range(6)]
+    )
+
+
+def test_a_model_error_still_reports_the_calls_that_succeeded_before_it(db, seeded):
+    result = _model_error_turn(db)
     assert result.type == "error"
     assert result.cost_usd == _cost(10, 5)
 
 
 def test_the_iteration_cap_reports_every_call_it_paid_for(db, seeded):
-    llm = ScriptedClient(
-        [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})) for _ in range(6)]
-    )
-    result = _run(
-        user_message="x",
-        role=Role.OPERATOR.value,
-        actor="u-1",
-        session_id="s-1",
-        db=db,
-        llm=llm,
-        trace_id="abc12345",
-    )
+    result = _iteration_cap_turn(db)
     assert result.text == FALLBACK_MAX_ITERATIONS
     assert result.cost_usd == _cost(10, 5) * 5
+
+
+def test_a_model_error_reports_the_tokens_the_turn_had_already_spent(db, seeded):
+    """Zeros here would tell an operator the failing turn was free: one call was paid for."""
+    telemetry = _model_error_turn(db).telemetry
+    assert telemetry["input_tokens"] == 10
+    assert telemetry["output_tokens"] == 5
+    assert telemetry["iterations"] == 1
+
+
+def test_a_model_error_on_the_first_call_reports_zeros_and_no_iteration(db, seeded):
+    """Nothing came back, so nothing is claimed: these zeros are measured, not assumed."""
+    assert _failing_turn(db, [TimeoutError("simulated")]).telemetry == _NO_MODEL_RAN
+
+
+def test_the_iteration_cap_reports_the_tokens_of_every_call_it_made(db, seeded):
+    """The most expensive turn there is; it must not report itself as the cheapest."""
+    calls = settings.llm_max_iterations
+    telemetry = _iteration_cap_turn(db).telemetry
+    assert telemetry["input_tokens"] == 10 * calls
+    assert telemetry["output_tokens"] == 5 * calls
+    assert telemetry["iterations"] == calls
 
 
 def _write_args(order_id: int, new_status: str = "delivered") -> dict[str, Any]:

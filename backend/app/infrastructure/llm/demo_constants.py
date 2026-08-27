@@ -1,78 +1,69 @@
-"""Keyword tables and the Spanish lines the demo model "says".
+"""Stem tables and the Spanish lines the demo model "says".
 
 This copy is model output, not application messaging, so it lives beside the demo
-client instead of in app/application/messages.py. Every keyword is stored already
-lowercased and unaccented, because matching runs on normalised text.
+client instead of in app/application/messages.py. Every stem is stored already
+lowercased and unaccented, and matches any word that starts with it.
 """
 
 import re
 from collections.abc import Mapping
+from enum import Enum
 
 from app.application.permissions import ToolName
 from app.domain.constants import OrderStatus
 
+
+class WriteSlot(str, Enum):
+    """The two arguments a status change needs, so a clarification can name the missing one."""
+
+    ORDER_ID = "order_id"
+    NEW_STATUS = "new_status"
+
+
 # Ordered on purpose: "cambia la orden 11" also mentions an order, so writes match first.
-KEYWORDS: Mapping[ToolName, tuple[str, ...]] = {
+TOOL_STEMS: Mapping[ToolName, tuple[str, ...]] = {
+    # "actualic"/"marqu" are the same verbs after the c/z spelling shift ("actualices").
     ToolName.UPDATE_ORDER_STATUS: (
-        "cambia",
-        "cambiar",
-        "cambiale",
-        "actualiza",
-        "actualizar",
-        "cancela",
-        "cancelar",
-        "marca",
-        "marcar",
-        "pon",
-        "poner",
-        "mueve",
+        "actualic",
+        "actualiz",
+        "cambi",
+        "cancel",
+        "marc",
+        "marqu",
         "mover",
+        "muev",
+        "pon",
     ),
     ToolName.GET_CLIENT_BALANCE: (
         "saldo",
-        "saldos",
         "deuda",
-        "deudas",
         "debe",
         "adeuda",
         "pago",
-        "pagos",
         "balance",
         "credito",
     ),
     ToolName.GET_SALES_ORDERS: (
         "orden",
-        "ordenes",
         "pedido",
-        "pedidos",
         "venta",
-        "ventas",
-        "entrega",
-        "entregas",
+        "entreg",
         "pendiente",
-        "pendientes",
-        "entregada",
-        "entregadas",
-        "entregado",
-        "entregados",
-        "cancelada",
-        "canceladas",
+        "cancelad",
         "proceso",
     ),
 }
 
-STATUS_KEYWORDS: Mapping[OrderStatus, tuple[str, ...]] = {
-    OrderStatus.PENDING: ("pendiente", "pendientes"),
+# Suffixes that veto a stem match: a past participle ("canceladas") names a state, not a command.
+STEM_EXCLUSIONS: Mapping[ToolName, tuple[str, ...]] = {
+    ToolName.UPDATE_ORDER_STATUS: ("ada", "adas", "ado", "ados"),
+}
+
+STATUS_STEMS: Mapping[OrderStatus, tuple[str, ...]] = {
+    OrderStatus.PENDING: ("pendiente",),
     OrderStatus.IN_PROGRESS: ("proceso", "curso", "progreso"),
-    OrderStatus.DELIVERED: ("entregada", "entregadas", "entregado", "entregados", "entregar"),
-    OrderStatus.CANCELLED: (
-        "cancelada",
-        "canceladas",
-        "cancelado",
-        "cancelados",
-        "cancela",
-        "cancelar",
-    ),
+    OrderStatus.DELIVERED: ("entregad", "entregar"),
+    OrderStatus.CANCELLED: ("cancel",),
 }
 
 CLARIFICATIONS: Mapping[ToolName, str] = {
@@ -83,6 +74,63 @@ CLARIFICATIONS: Mapping[ToolName, str] = {
         "Para cambiar una orden necesito su número y el estado destino "
         "(pendiente, en proceso, entregada o cancelada). Por ejemplo: "
         "«marca la orden #11 como entregada»."
+    ),
+}
+
+# Never interpolated: each line is its own opener in CLARIFICATION_OPENERS below.
+MISSING_SLOT_ASKS: Mapping[WriteSlot, str] = {
+    WriteSlot.ORDER_ID: (
+        "Ya tengo el estado destino, pero me falta el número de la orden. "
+        "Dímelo y te preparo el cambio; por ejemplo: «la 12»."
+    ),
+    WriteSlot.NEW_STATUS: (
+        "Ya tengo la orden, pero me falta el estado destino: pendiente, en proceso, "
+        "entregada o cancelada. ¿A cuál la muevo?"
+    ),
+}
+
+# Words that carry no intent of their own, so a message made only of these, a number, a status
+# and the pending tool's own verb is an answer to the pending question rather than a new request.
+SLOT_ANSWER_FILLERS: frozenset[str] = frozenset(
+    {
+        "a",
+        "al",
+        "de",
+        "del",
+        "el",
+        "en",
+        "es",
+        "favor",
+        "la",
+        "las",
+        "lo",
+        "los",
+        "numero",
+        "orden",
+        "ordenes",
+        "pedido",
+        "pedidos",
+        "por",
+    }
+)
+
+# A handful, not thirty; the answer says how many it is showing out of how many it found.
+CANDIDATES_SAMPLE_SIZE = 5
+CANDIDATES_QUESTION = "¿Cuál de estas órdenes quieres cambiar?"
+CANDIDATES_ANSWER = (
+    "{question} Te muestro {shown} de las {found} que admiten ese cambio: {sample}. "
+    "Dime su número; por ejemplo: «la {example}»."
+)
+CANDIDATES_EMPTY_ANSWER = "No encontré ninguna orden a la que pueda aplicarle ese cambio."
+
+# Every line that asks for a missing argument, by the tool it asks about: the client recognises
+# its own question by these openers, so the next message completes the intent it left hanging.
+CLARIFICATION_OPENERS: Mapping[ToolName, tuple[str, ...]] = {
+    ToolName.GET_CLIENT_BALANCE: (CLARIFICATIONS[ToolName.GET_CLIENT_BALANCE],),
+    ToolName.UPDATE_ORDER_STATUS: (
+        CLARIFICATIONS[ToolName.UPDATE_ORDER_STATUS],
+        CANDIDATES_QUESTION,
+        *MISSING_SLOT_ASKS.values(),
     ),
 }
 

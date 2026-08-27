@@ -42,7 +42,7 @@ class GroundedModel:
     def __init__(self) -> None:
         self._asked = False
 
-    def create(self, *, system, messages, tools, model=None):
+    def create(self, *, system, messages, tools):
         if not self._asked:
             self._asked = True
             return read_proposal()

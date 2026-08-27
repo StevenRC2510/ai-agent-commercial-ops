@@ -161,6 +161,20 @@ def test_an_error_turn_bills_the_session_for_what_it_spent(client, seeded, sessi
     assert sessions.get_or_create("s-1").accumulated_cost_usd == _DIME * calls
 
 
+def test_an_error_turn_carries_the_same_telemetry_footer_as_any_other(client, seeded):
+    """/chat used to answer `telemetry: null` exactly on the turns that cost the most."""
+    calls = settings.llm_max_iterations
+    app.dependency_overrides[get_llm] = lambda: ScriptedClient(
+        [read_proposal(input_tokens=_DIME_TOKENS)] * calls
+    )
+    body = client.post(
+        "/chat", json={"message": "dame ordenes", "session_id": "s-1"}, headers=_operator()
+    ).json()
+    assert body["type"] == "error"
+    assert body["telemetry"]["input_tokens"] == _DIME_TOKENS * calls
+    assert body["telemetry"]["iterations"] == calls
+
+
 def test_confirmation_only_turns_eventually_hit_the_budget_ceiling(client, db, seeded):
     """A session of nothing but confirmations must still run out of money."""
     order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()

@@ -54,13 +54,12 @@ class AnthropicClient:
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        model: str | None = None,
     ) -> LLMResponse:
         try:
-            return self._call(system=system, messages=messages, tools=tools, model=model)
+            return self._call(system=system, messages=messages, tools=tools)
         except RETRYABLE_ERRORS:
             time.sleep(RETRY_BACKOFF_SECONDS)
-            return self._call(system=system, messages=messages, tools=tools, model=model)
+            return self._call(system=system, messages=messages, tools=tools)
 
     def _call(
         self,
@@ -68,10 +67,9 @@ class AnthropicClient:
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        model: str | None,
     ) -> LLMResponse:
         response = self._client.messages.create(
-            model=model or self._model,
+            model=self._model,
             system=system,
             # The port types these as plain dicts; the shape matches the SDK's TypedDicts.
             messages=cast("list[MessageParam]", messages),

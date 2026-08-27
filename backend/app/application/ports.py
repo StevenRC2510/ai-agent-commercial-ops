@@ -25,7 +25,6 @@ class LLMClient(Protocol):
         system: str,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        model: str | None = None,
     ) -> LLMResponse: ...
 
 
