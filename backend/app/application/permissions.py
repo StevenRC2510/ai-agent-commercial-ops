@@ -26,6 +26,7 @@ class DenialReason(str, Enum):
     INVALID_ARGUMENTS = "invalid_arguments"
     ORDER_NOT_FOUND = "order_not_found"
     INVALID_STATUS_TRANSITION = "invalid_status_transition"
+    STATE_CHANGED_SINCE_CONSENT = "state_changed_since_consent"
 
 
 ROLE_PERMISSIONS: MappingProxyType[Role, frozenset[ToolName]] = MappingProxyType(

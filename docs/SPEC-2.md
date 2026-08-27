@@ -50,12 +50,16 @@ La SPEC 1 fija la estructura hexagonal del backend y deja huecos reservados para
 
 | Módulo conceptual | Ruta final |
 |---|---|
-| `LLMClient`, `PendingActionStore` (protocolos) | `app/domain/ports/llm.py` |
+| `LLMClient`, `LLMResponse`, `PendingActionStore` (protocolos) | `app/application/ports.py` |
+| `PendingAction` (tipo) | `app/application/pending.py` |
+| `ConversationSession` (tipo, construido solo con primitivas) | `app/domain/session.py` |
 | Orquestador, prompts, schemas de tools | `app/application/agent/orchestrator.py`, `app/application/agent/prompts.py`, `app/application/agent/tool_schemas.py` |
 | Adaptadores del LLM | `app/infrastructure/llm/anthropic.py`, `app/infrastructure/llm/scripted.py`, `app/infrastructure/llm/pricing.py` |
 | Acciones pendientes (adaptador en memoria) | `app/infrastructure/pending/memory.py` |
 | Endpoints HTTP | `app/api/routes/chat.py`, `app/api/routes/confirm.py` |
 | Frontend | `frontend/src/features/chat/**` |
+
+**Corrección aplicada tras SPEC-1:** el texto original reservaba `app/domain/ports/llm.py` para ambos protocolos. Es incorrecto: `PendingAction` carga un `ToolName`, que vive en `app.application.permissions`, así que un `PendingAction` de dominio importaría `app.application` y rompería la regla de dependencia hexagonal (`tests/architecture/test_imports.py`). `LLMClient` sí habría pasado la prueba en el dominio — `LLMResponse` son solo primitivas — pero un dominio que sabe que existe un modelo de lenguaje contradice la tesis de todo este proyecto. Los puertos pertenecen a la capa que los consume, y quien consume el LLM es el orquestador. Por eso `LLMClient`, `LLMResponse` y `PendingActionStore` viven en `app/application/ports.py`, `PendingAction` en `app/application/pending.py`, y solo `ConversationSession` — construida solo con primitivas — va en el dominio, en `app/domain/session.py`.
 
 Donde el resto de esta spec se refiera a un módulo por su nombre corto (`agent/prompts.py`, `agent/llm.py`, `agent/orchestrator.py`, `agent/pending.py`, `main.py`), es una abreviatura del módulo conceptual; la ruta real dentro del árbol hexagonal es la de esta tabla.
 
