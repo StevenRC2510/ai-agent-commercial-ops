@@ -65,6 +65,18 @@ _MAPPING_GENERICS = frozenset({"Mapping", "MutableMapping", "dict", "Dict"})
 # logging.config.dictConfig's schema, a stdlib vocabulary we do not define or enumerate.
 _MAPPING_KEY_EXEMPTIONS = frozenset({("app/infrastructure/obs.py", "LOGGING_CONFIG")})
 
+# A constant longer than this is a data table, not a knob, and belongs in a constants module.
+_MAX_CONSTANT_LINES = 5
+
+# (relative path, constant name): constants that cannot leave their module because the value
+# references a class defined beside it — extracting either one would be a circular import.
+_CONSTANT_EXTRACTION_EXEMPTIONS = frozenset(
+    {
+        ("app/application/tool_args.py", "TOOL_SCHEMAS"),
+        ("app/infrastructure/obs.py", "LOGGING_CONFIG"),
+    }
+)
+
 
 def _generic_name(node: ast.expr) -> str | None:
     if isinstance(node, ast.Name):
@@ -125,6 +137,74 @@ def test_mapping_key_exemptions_are_not_silent_holes() -> None:
             for node in tree.body
         )
         assert found, (
+            f"{relative_path}: exempted constant {name!r} no longer exists — "
+            "remove the exemption or restore the constant."
+        )
+
+
+def _module_level_constants(tree: ast.Module) -> list[tuple[str, int]]:
+    """Every module-level constant-style assignment, as (name, lines it spans)."""
+    constants: list[tuple[str, int]] = []
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target]
+        elif isinstance(node, ast.Assign):
+            targets = [t for t in node.targets if isinstance(t, ast.Name)]
+        else:
+            continue
+        span = (node.end_lineno or node.lineno) - node.lineno + 1
+        constants.extend((t.id, span) for t in targets if _CONSTANT_NAME.match(t.id))
+    return constants
+
+
+def _is_constants_module(path: Path, tree: ast.Module) -> bool:
+    """A named constants module, or one holding only data: it has no logic to protect."""
+    if path.stem == "constants" or path.stem.endswith("_constants"):
+        return True
+    return not any(isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) for n in ast.walk(tree))
+
+
+def _constant_extraction_violation(path: Path, relative_path: str) -> str | None:
+    tree = ast.parse(path.read_text())
+    if _is_constants_module(path, tree):
+        return None
+    found = [
+        (name, span)
+        for name, span in _module_level_constants(tree)
+        if (relative_path, name) not in _CONSTANT_EXTRACTION_EXEMPTIONS
+    ]
+    oversized = [name for name, span in found if span > _MAX_CONSTANT_LINES]
+    if len(found) < 2 and not oversized:
+        return None
+    names = sorted(name for name, _ in found)
+    reason = (
+        f"holds {len(found)} module-level constants {names}"
+        if len(found) >= 2
+        else f"holds one module-level constant {names[0]!r} spanning more than "
+        f"{_MAX_CONSTANT_LINES} lines"
+    )
+    return (
+        f"{relative_path}: {reason}. Extract to a sibling {path.stem}_constants.py so the "
+        "logic module reads as logic and the constants are looked up in a named place."
+    )
+
+
+def test_modules_with_several_constants_keep_them_in_a_constants_file() -> None:
+    """Two constants, or one data table, turn a logic module into a place to scroll past."""
+    violations = []
+    for path in sorted(_APP_DIR.rglob("*.py")):
+        violation = _constant_extraction_violation(path, str(path.relative_to(_BACKEND_DIR)))
+        if violation:
+            violations.append(violation)
+    assert not violations, "\n".join(violations)
+
+
+def test_constant_extraction_exemptions_are_not_silent_holes() -> None:
+    """Every exemption must still name a real constant, or it is dead configuration."""
+    for relative_path, name in _CONSTANT_EXTRACTION_EXEMPTIONS:
+        path = _BACKEND_DIR / relative_path
+        found = {constant for constant, _ in _module_level_constants(ast.parse(path.read_text()))}
+        assert name in found, (
             f"{relative_path}: exempted constant {name!r} no longer exists — "
             "remove the exemption or restore the constant."
         )
