@@ -235,7 +235,7 @@ Comportamiento requerido:
    - Si `stop_reason != "tool_use"` → `TurnResult(type="message")`
    - Por cada bloque `tool_use`:
      - `decision = policy.evaluate(...)`; loguea `policy_decision`
-     - **Denegado** → `tool_result` con `is_error=True` y el `detail`; `AuditLog` con `outcome="denied"`; sigue el bucle para que el modelo lo explique al usuario
+     - **Denegado** → llama a `presentation.render_denial(decision.reason)` y devuelve ese texto como `tool_result` con `is_error=True`; `AuditLog` con `outcome="denied"`; sigue el bucle para que el modelo lo explique al usuario
      - **Requiere confirmación** → `pending.create(...)`, loguea `confirmation_required`, y **retorna inmediatamente**. No ejecuta, no itera más
      - **Permitido** → ejecuta en `try/except`; loguea `tool_executed` con `ok` y `duration_ms`; ante excepción de dominio devuelve al modelo un error seguro, **nunca el stacktrace**
    - Envuelve todo resultado antes de dárselo al modelo:

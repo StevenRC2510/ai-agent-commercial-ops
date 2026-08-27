@@ -44,7 +44,7 @@ Capas con una regla de dependencia estricta:
 | Capa | Archivo | Responsabilidad | Restricción |
 |---|---|---|---|
 | **Política** | `app/application/policy.py` | Qué se permite: rol + validación de argumentos + reglas de estado | **No importa `anthropic`, `fastapi`, `httpx` ni nada de `agent`** |
-| **Presentación** | `app/application/presentation.py` | Convierte el `ActionDescriptor` de la política en la frase en español que el usuario consiente | No decide nada; solo formatea, con `STATUS_LABELS_ES` |
+| **Presentación** | `app/application/presentation.py` | Convierte el `OrderStatusChange` (de `app/domain/actions.py`) en la frase en español que el usuario consiente | No decide nada; solo formatea, con `STATUS_LABELS_ES` |
 | **Ejecución** | `app/application/tools.py` | Acceso a datos | No sabe que existe un LLM; confía en los `safe_args` ya normalizados por policy |
 | **Adaptadores** | `app/api/` (routes, middleware) y `app/main.py` | Transporte HTTP, CORS restringido a `FRONTEND_ORIGIN` | Depende del núcleo, nunca al revés |
 
@@ -604,7 +604,7 @@ Requisitos: el `Dockerfile` del backend no corre como root · `requirements.txt`
 
 **`tests/application/test_presentation.py`:**
 
-- `render_summary()` sobre un `ActionDescriptor` de ejemplo produce la frase exacta esperada, usando `STATUS_LABELS_ES`
+- `render_summary()` sobre un `OrderStatusChange` de ejemplo produce la frase exacta esperada, usando `STATUS_LABELS_ES`
 - `render_summary()` no toca la base de datos ni importa SQLAlchemy (verificable por inspección de imports, igual que en `test_imports.py`)
 
 **`tests/application/test_tools.py`:**

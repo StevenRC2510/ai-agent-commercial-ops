@@ -10,11 +10,14 @@ from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.application.permissions import REQUIRES_CONFIRMATION, ROLE_PERMISSIONS
-from app.application.tool_args import TOOL_SCHEMAS
+from app.application.tool_args import TOOL_SCHEMAS, UpdateOrderStatusArgs
 from app.domain.actions import OrderStatusChange
+from app.domain.constants import ALLOWED_TRANSITIONS
+from app.domain.models import Order
 
 
 class DenialReason(str, Enum):
@@ -51,7 +54,11 @@ def visible_tools_for(role: str) -> frozenset[str]:
 
 
 def evaluate(tool_name: str, raw_args: dict, role: str, db: Session) -> PolicyDecision:
-    """Decide whether this call may run. The order of checks is significant."""
+    """Decide whether this call may run. The order of checks is significant.
+
+    `db` must be a usable session: if it is mid a failed transaction, `_check_state` raises
+    rather than authorising anything.
+    """
     schema = TOOL_SCHEMAS.get(tool_name)
     if schema is None:
         return _deny(DenialReason.UNKNOWN_TOOL)
@@ -70,13 +77,39 @@ def evaluate(tool_name: str, raw_args: dict, role: str, db: Session) -> PolicyDe
 
 
 def _check_state(tool_name: str, args: BaseModel, db: Session) -> PolicyDecision:
-    """Data-dependent preconditions. The only place this module touches the DB.
+    """Data-dependent preconditions. The only place this module touches the DB."""
+    safe_args = MappingProxyType(args.model_dump(mode="json"))
+    requires_confirmation = tool_name in REQUIRES_CONFIRMATION
 
-    Task 9 replaces this stub with the transition matrix and existence checks.
-    """
+    if not requires_confirmation:
+        return PolicyDecision(
+            allowed=True,
+            requires_confirmation=False,
+            reason="ok",
+            safe_args=safe_args,
+        )
+
+    if not isinstance(args, UpdateOrderStatusArgs):
+        raise TypeError(f"{tool_name} requires UpdateOrderStatusArgs, got {type(args).__name__}")
+
+    current_status = db.execute(
+        select(Order.status).where(Order.id == args.order_id)
+    ).scalar_one_or_none()
+    if current_status is None:
+        return _deny(DenialReason.ORDER_NOT_FOUND)
+
+    if args.new_status not in ALLOWED_TRANSITIONS[current_status]:
+        return _deny(DenialReason.INVALID_STATUS_TRANSITION)
+
     return PolicyDecision(
         allowed=True,
-        requires_confirmation=tool_name in REQUIRES_CONFIRMATION,
+        requires_confirmation=requires_confirmation,
         reason="ok",
-        safe_args=MappingProxyType(args.model_dump(mode="json")),
+        safe_args=safe_args,
+        change=OrderStatusChange(
+            order_id=args.order_id,
+            from_status=current_status,
+            to_status=args.new_status,
+            reason=args.reason,
+        ),
     )

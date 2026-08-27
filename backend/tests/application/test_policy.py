@@ -1,9 +1,30 @@
 """Authorization tests. Deterministic, exhaustive, and free of any model."""
 
+import itertools
+from datetime import date
+from decimal import Decimal
+
 import pytest
 
 from app.application import policy, presentation
-from app.domain.constants import MAX_ORDER_LIMIT, OrderStatus
+from app.application.tool_args import GetSalesOrdersArgs
+from app.domain.actions import OrderStatusChange
+from app.domain.constants import ALLOWED_TRANSITIONS, MAX_ORDER_LIMIT, OrderStatus
+from app.domain.models import Client, Order
+
+
+def _make_order(db, status: OrderStatus) -> int:
+    client = db.query(Client).first()
+    if client is None:
+        client = Client(name="Fixture Client", email="f@example.com", credit_limit=Decimal("0.00"))
+        db.add(client)
+        db.flush()
+    order = Order(
+        client_id=client.id, status=status, total=Decimal("100.00"), created_at=date(2026, 6, 1)
+    )
+    db.add(order)
+    db.flush()
+    return order.id
 
 
 def test_operator_may_read_orders(db):
@@ -149,12 +170,16 @@ def test_operator_may_read_client_balance(db):
     assert decision.reason == "ok"
 
 
-@pytest.mark.parametrize("status", list(OrderStatus))
-def test_supervisor_may_update_to_every_valid_status(status, db):
-    """The only write tool must actually be callable, for every status it supports."""
+@pytest.mark.parametrize(
+    "current,target",
+    [(current, target) for current in OrderStatus for target in ALLOWED_TRANSITIONS[current]],
+)
+def test_supervisor_may_perform_every_allowed_transition(current, target, db):
+    """The only write tool must actually be callable, for every transition the table allows."""
+    order_id = _make_order(db, current)
     decision = policy.evaluate(
         "update_order_status",
-        {"order_id": 1, "new_status": status.value, "reason": "motivo valido"},
+        {"order_id": order_id, "new_status": target.value, "reason": "motivo valido"},
         "supervisor",
         db,
     )
@@ -210,3 +235,79 @@ def test_whitespace_only_reason_is_rejected(db):
 def test_every_tool_schema_is_reachable_by_some_role():
     """Catches a tool added to TOOL_SCHEMAS but forgotten in ROLE_PERMISSIONS, or vice versa."""
     assert set(policy.TOOL_SCHEMAS) == frozenset().union(*policy.ROLE_PERMISSIONS.values())
+
+
+def test_tool_schema_classes_are_pairwise_distinct_and_non_inheriting():
+    """_check_state branches on the tool name, but if a schema ever subclassed another,
+    isinstance narrowing alone could no longer tell them apart — pin that it can't happen."""
+    classes = list(policy.TOOL_SCHEMAS.values())
+    assert len(classes) == len(set(classes))
+    for one, other in itertools.permutations(classes, 2):
+        assert not issubclass(one, other)
+
+
+def test_missing_order_is_reported_as_such_not_as_a_bad_transition(db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": 999999, "new_status": "delivered", "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "order_not_found"
+
+
+def test_delivered_cannot_return_to_pending(db):
+    order_id = _make_order(db, OrderStatus.DELIVERED)
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": order_id, "new_status": "pending", "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_status_transition"
+
+
+@pytest.mark.parametrize("current,target", list(itertools.product(OrderStatus, OrderStatus)))
+def test_full_transition_matrix_matches_the_constant(current, target, db):
+    """All sixteen combinations. Exhaustive, not sampled."""
+    order_id = _make_order(db, current)
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": order_id, "new_status": target.value, "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    expected = target in ALLOWED_TRANSITIONS[current]
+    assert decision.allowed is expected
+    if not expected:
+        assert decision.reason == "invalid_status_transition"
+
+
+def test_allowed_write_requires_confirmation_and_carries_a_change(db):
+    order_id = _make_order(db, OrderStatus.PENDING)
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": order_id, "new_status": "in_progress", "reason": "el taller ya lo recibio"},
+        "supervisor",
+        db,
+    )
+    assert decision.allowed is True
+    assert decision.requires_confirmation is True
+    assert decision.change == OrderStatusChange(
+        order_id=order_id,
+        from_status=OrderStatus.PENDING,
+        to_status=OrderStatus.IN_PROGRESS,
+        reason="el taller ya lo recibio",
+    )
+
+
+def test_read_tools_carry_no_change(db):
+    assert policy.evaluate("get_sales_orders", {}, "operator", db).change is None
+
+
+def test_check_state_raises_when_args_type_disagrees_with_the_tool_name(db):
+    """A tool_name/args mismatch is a programming error: it must fail loudly, never fall
+    through to a permissive read-shaped decision."""
+    with pytest.raises(TypeError):
+        policy._check_state("update_order_status", GetSalesOrdersArgs(), db)
