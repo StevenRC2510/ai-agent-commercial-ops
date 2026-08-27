@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.application import policy, presentation, tools
 from app.application.agent.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from app.application.agent.tool_schemas import tool_schemas_for
+from app.application.constants import PERSONAL_FIELDS
 from app.application.messages import (
     FALLBACK_BUDGET_EXCEEDED,
     FALLBACK_INPUT_TOO_LONG,
@@ -36,14 +37,20 @@ LogFn = Callable[..., None]
 JSONValue = dict[str, "JSONValue"] | list["JSONValue"] | str | int | float | bool | None
 
 _ZERO_COST = Decimal("0.00")
-_PERSONAL_FIELDS = frozenset({"email"})
 
 
 @dataclass(frozen=True)
 class TurnResult:
+    """`cost_usd` is what THIS turn spent, and it has no default on purpose.
+
+    Telemetry only exists for a turn that reached a final message; billing must not
+    depend on how the turn ended, so a missing cost fails construction instead.
+    """
+
     type: Literal["message", "confirmation_required", "error"]
     text: str
     trace_id: str
+    cost_usd: Decimal
     pending_id: str | None = None
     pending_summary: str | None = None
     telemetry: dict[str, Any] | None = None
@@ -57,12 +64,12 @@ def wrap_untrusted(payload: dict[str, JSONValue]) -> str:
 
 def strip_personal_fields(payload: dict[str, JSONValue]) -> dict[str, JSONValue]:
     """Recursively drops personal identifiers the model does not need to answer (SPEC-2 §6.1)."""
-    return {key: _strip(value) for key, value in payload.items() if key not in _PERSONAL_FIELDS}
+    return {key: _strip(value) for key, value in payload.items() if key not in PERSONAL_FIELDS}
 
 
 def _strip(value: JSONValue) -> JSONValue:
     if isinstance(value, dict):
-        return {key: _strip(v) for key, v in value.items() if key not in _PERSONAL_FIELDS}
+        return {key: _strip(v) for key, v in value.items() if key not in PERSONAL_FIELDS}
     if isinstance(value, list):
         return [_strip(item) for item in value]
     return value
@@ -105,6 +112,7 @@ def _confirmation_result(
     trace_id: str,
     store: PendingActionStore,
     log_fn: LogFn,
+    cost_usd: Decimal,
 ) -> TurnResult:
     if decision.change is None:
         raise AssertionError("requires_confirmation implies policy set a change")
@@ -125,6 +133,7 @@ def _confirmation_result(
         type="confirmation_required",
         text=summary,
         trace_id=trace_id,
+        cost_usd=cost_usd,
         pending_id=pending_id,
         pending_summary=summary,
     )
@@ -150,18 +159,24 @@ def run_turn(
     can never find what `/chat` proposed, and a missing logger means the audit
     trail silently stops existing. Neither failure should be possible to forget.
     """
+    # What this turn spends, separate from what the session already spent. Never a default.
+    turn_cost = _ZERO_COST
+
     if len(user_message) > settings.max_message_chars:
-        return TurnResult(type="error", text=FALLBACK_INPUT_TOO_LONG, trace_id=trace_id)
+        return TurnResult(
+            type="error", text=FALLBACK_INPUT_TOO_LONG, trace_id=trace_id, cost_usd=turn_cost
+        )
 
     if already_spent > settings.max_cost_per_session_usd:
-        return TurnResult(type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id=trace_id)
+        return TurnResult(
+            type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id=trace_id, cost_usd=turn_cost
+        )
 
     log(trace_id, "user_message", chars=len(user_message), sha8=_sha8(user_message))
 
     messages = history if history is not None else []
     messages.append({"role": "user", "content": user_message})
 
-    spent = already_spent
     system_prompt = SYSTEM_PROMPT.format(role=role, today=date.today().isoformat())
     declared_tools = tool_schemas_for(role)
     total_input_tokens = 0
@@ -178,14 +193,16 @@ def run_turn(
             )
         except Exception as exc:
             log(trace_id, "llm_error", error=str(exc))
-            return TurnResult(type="error", text=FALLBACK_LLM_ERROR, trace_id=trace_id)
+            return TurnResult(
+                type="error", text=FALLBACK_LLM_ERROR, trace_id=trace_id, cost_usd=turn_cost
+            )
         latency_ms = int((time.monotonic() - started) * 1000)
         total_latency_ms += latency_ms
         total_input_tokens += response.input_tokens
         total_output_tokens += response.output_tokens
 
         call_cost = estimate_cost(response.model, response.input_tokens, response.output_tokens)
-        spent += call_cost
+        turn_cost += call_cost
         log(
             trace_id,
             "llm_call",
@@ -199,8 +216,10 @@ def run_turn(
             prompt_version=PROMPT_VERSION,
         )
 
-        if spent > settings.max_cost_per_session_usd:
-            return TurnResult(type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id=trace_id)
+        if already_spent + turn_cost > settings.max_cost_per_session_usd:
+            return TurnResult(
+                type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id=trace_id, cost_usd=turn_cost
+            )
 
         messages.append({"role": "assistant", "content": response.content})
 
@@ -215,6 +234,7 @@ def run_turn(
                 type="message",
                 text=_extract_text(response.content),
                 trace_id=trace_id,
+                cost_usd=turn_cost,
                 telemetry=telemetry,
             )
 
@@ -266,6 +286,7 @@ def run_turn(
                     trace_id=trace_id,
                     store=pending_store,
                     log_fn=log,
+                    cost_usd=turn_cost,
                 )
 
             exec_started = time.monotonic()
@@ -286,4 +307,6 @@ def run_turn(
         messages.append({"role": "user", "content": tool_results})
 
     log(trace_id, "max_iterations_reached")
-    return TurnResult(type="error", text=FALLBACK_MAX_ITERATIONS, trace_id=trace_id)
+    return TurnResult(
+        type="error", text=FALLBACK_MAX_ITERATIONS, trace_id=trace_id, cost_usd=turn_cost
+    )

@@ -14,6 +14,7 @@ from app.application.agent.orchestrator import (
     strip_personal_fields,
     wrap_untrusted,
 )
+from app.application.constants import Model
 from app.application.messages import (
     FALLBACK_BUDGET_EXCEEDED,
     FALLBACK_INPUT_TOO_LONG,
@@ -22,6 +23,7 @@ from app.application.messages import (
 from app.application.permissions import Role, ToolName
 from app.application.policy import PolicyDecision
 from app.application.ports import LLMResponse
+from app.application.pricing import estimate_cost
 from app.domain.constants import OrderStatus
 from app.domain.models import AuditLog, Order
 from app.infrastructure.llm.scripted import ScriptedClient
@@ -379,7 +381,12 @@ def test_the_budget_guard_fires_from_real_accumulated_cost(db, seeded):
         llm=llm,
         trace_id="abc12345",
     )
-    assert result == TurnResult(type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id="abc12345")
+    assert result == TurnResult(
+        type="error",
+        text=FALLBACK_BUDGET_EXCEEDED,
+        trace_id="abc12345",
+        cost_usd=Decimal("1.50"),  # the one call it did make, at $5/M output
+    )
     assert len(llm.calls) == 1
 
 
@@ -451,6 +458,7 @@ def test_a_confirmation_decision_without_a_change_is_an_invariant_violation() ->
             trace_id="abc12345",
             store=_store(),
             log_fn=_log,
+            cost_usd=Decimal("0.00"),
         )
 
 
@@ -477,3 +485,113 @@ def test_the_logger_never_receives_raw_user_text(db, seeded):
     assert "chars" in user_message_events[0]
     assert "sha8" in user_message_events[0]
     assert all(secret_text not in str(value) for _, fields in logged for value in fields.values())
+
+
+def _cost(input_tokens: int, output_tokens: int) -> Decimal:
+    return estimate_cost(Model.HAIKU_4_5, input_tokens, output_tokens)
+
+
+def test_a_completed_turn_reports_exactly_what_it_spent(db, seeded):
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=ScriptedClient([_text_response("hola")]),
+        trace_id="abc12345",
+    )
+    assert result.cost_usd == _cost(10, 5)
+
+
+def test_a_guard_that_returns_before_any_model_call_reports_a_computed_zero(db, seeded):
+    result = _run(
+        user_message="x" * 2001,
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=ScriptedClient([]),
+        trace_id="abc12345",
+    )
+    assert result.cost_usd == Decimal("0.00")
+
+
+def test_the_budget_guard_bills_nothing_for_the_turn_it_refuses_to_start(db, seeded):
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=ScriptedClient([]),
+        trace_id="abc12345",
+        already_spent=Decimal("999.00"),
+    )
+    assert result.cost_usd == Decimal("0.00")
+
+
+def test_a_confirmation_turn_reports_the_calls_it_paid_for(db, seeded):
+    """The write path carries no telemetry, so cost_usd is the only record of its spend."""
+    order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
+    llm = ScriptedClient(
+        [
+            _response_with(
+                _tool_use(
+                    ToolName.UPDATE_ORDER_STATUS,
+                    {"order_id": order.id, "new_status": "delivered", "reason": "motivo valido"},
+                )
+            )
+        ]
+    )
+    result = _run(
+        user_message="x",
+        role=Role.SUPERVISOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "confirmation_required"
+    assert result.cost_usd == _cost(10, 5)
+
+
+def test_a_model_error_still_reports_the_calls_that_succeeded_before_it(db, seeded):
+    llm = ScriptedClient(
+        [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})), TimeoutError("simulated")]
+    )
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "error"
+    assert result.cost_usd == _cost(10, 5)
+
+
+def test_the_iteration_cap_reports_every_call_it_paid_for(db, seeded):
+    llm = ScriptedClient(
+        [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})) for _ in range(6)]
+    )
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.text == FALLBACK_MAX_ITERATIONS
+    assert result.cost_usd == _cost(10, 5) * 5
+
+
+def test_cost_usd_has_no_default_a_missing_value_must_fail_construction() -> None:
+    """A zero default is exactly how under-billing would come back unnoticed."""
+    with pytest.raises(TypeError):
+        TurnResult(type="message", text="x", trace_id="abc12345")
