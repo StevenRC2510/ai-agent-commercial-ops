@@ -279,6 +279,10 @@ Un solo componente de chat. Sin librerías de UI, CSS plano. Limpio y funcional;
 
 **Estados explícitos y accesibilidad.** Todo componente que dependa de red declara sus estados de carga, error y vacío — nunca un `undefined` implícito. Las peticiones usan `AbortController`, cancelado al desmontar y al cambiar de rol. La tarjeta de confirmación lleva `role` y `aria-live`; los inputs llevan `label`; el foco se gestiona explícitamente al abrir y cerrar la tarjeta; todo es alcanzable por teclado.
 
+## 9.2 Validación del entorno del frontend
+
+El backend valida su entorno con `app/infrastructure/env_check.py`, derivado de `Settings` (ver SPEC-1 sección 14). El frontend replica la misma idea con su propia herramienta: un schema de Zod sobre `import.meta.env`, evaluado al arranque de la app (`main.tsx` o un módulo `env.ts` en `shared/`) — coherente con la decisión ya tomada de validar en el borde con Zod (sección 9.1, `httpClient.ts`). Si una variable requerida falta o no cumple el schema, la app falla de forma explícita y temprana en vez de romperse más adelante con un error confuso. `make check-env` invoca esta validación vía `npm run check-env` cuando `frontend/` existe (ver SPEC-1 sección 14); hasta entonces se salta con el mismo guardia `if [ -d frontend ]` que usan los demás targets del Makefile. Lo implementan las Tareas 14/15, junto con el resto del andamiaje del frontend.
+
 ## 10. Variables de entorno añadidas
 
 ```bash

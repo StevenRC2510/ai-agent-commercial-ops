@@ -1,7 +1,17 @@
-.PHONY: up down test lint format check eval _sync
+.PHONY: up down test lint format check check-env eval _sync
+
+# Validates the environment before any container starts. Derived from app/config.py's
+# Settings model (see backend/app/infrastructure/env_check.py) — never a hand-kept list.
+check-env:
+	docker compose run --rm --no-deps backend python -m app.infrastructure.env_check
+	@if [ -d frontend ]; then \
+		cd frontend && npm run check-env; \
+	else \
+		echo "frontend/ not present yet — skipping frontend env check"; \
+	fi
 
 # Rebuilds the image: needed after changing requirements.txt or the Dockerfile.
-up:
+up: check-env
 	docker compose up --build -d --wait
 
 # Starts the stack without rebuilding: app/tests are bind-mounted, so code is always fresh.

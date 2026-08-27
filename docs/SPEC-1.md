@@ -100,6 +100,7 @@ Esa restricción sobre `policy.py` es la regla de dependencia de la arquitectura
 │       │   ├── db.py                # engine, SessionLocal, create_schema
 │       │   ├── seed.py              # deterministic data
 │       │   ├── obs.py               # structured logging
+│       │   ├── env_check.py         # validates Settings; `python -m app.infrastructure.env_check`
 │       │   ├── llm/                 # (SPEC 2) anthropic.py, scripted.py, pricing.py
 │       │   └── pending/             # (SPEC 2) memory.py
 │       └── api/
@@ -153,7 +154,7 @@ backend/tests/
 ├── conftest.py
 ├── domain/          test_constants.py · test_errors_context.py · test_models.py
 ├── application/     test_policy.py · test_presentation.py · test_tools.py
-├── infrastructure/  test_obs.py · test_seed.py
+├── infrastructure/  test_obs.py · test_seed.py · test_env_check.py
 ├── api/             test_health.py
 └── architecture/    test_imports.py · test_fixtures.py
 ```
@@ -498,30 +499,43 @@ Los volúmenes de `backend` montan `app/` y `tests/` del host sobre la copia hor
 
 `db/init/01-create-test-database.sh` crea `${POSTGRES_DB}_test` cuando Postgres inicializa el volumen `pgdata`; la base de tests es una base distinta de `commercial_ops` porque `db_real` hace `TRUNCATE ... CASCADE` y nunca debe poder alcanzar los datos sembrados de la aplicación. Postgres solo ejecuta los scripts de `docker-entrypoint-initdb.d` al inicializar el volumen, así que tras añadir o modificar este script hace falta `docker compose down -v`. `conftest.py` verifica en tiempo de colección que `TEST_DATABASE_URL` y `DATABASE_URL` no coincidan, y aborta con `RuntimeError` si lo hacen.
 
-`.env.example`, con un comentario por variable:
+`.env.example` documenta el CONTRATO de variables, no una configuración real: solo nombres y, por cada una, un comentario de una línea con qué hace y qué pasa si se deja vacía. Sin valores — ni siquiera las credenciales de desarrollo, que ya viven como default en `docker-compose.yml` y en `Settings` (`app/config.py`):
 
 ```bash
-# Copy to .env to override. Not required to boot: every variable here is
-# non-secret and has a working default.
+# Copy to .env to override. Not required to boot: docker-compose.yml gives every
+# variable below a working development default via `${VAR:-default}` — Docker
+# Compose treats an empty value the same as an unset one, so leaving a line blank
+# here is enough to fall back to that default.
 #
-# Secrets policy: a value may have a default ONLY if it is not a secret.
-# SPEC 1 has none. SPEC 2 introduces ANTHROPIC_API_KEY, which must have no
-# default and must fail loudly when missing.
+# This file lists NAMES only, on purpose: it documents the contract, not a live
+# configuration. Never fill it in with real values and commit it back.
+#
+# Secrets policy: a value may have a default ONLY if it is not a secret. SPEC 1
+# has none. SPEC 2 introduces ANTHROPIC_API_KEY, which must have no default and
+# must fail loudly when missing.
+#
+# Any shared (non-local) environment MUST set POSTGRES_PASSWORD explicitly —
+# the development default is public and offers no protection.
+#
+# Run `make check-env` (or `python -m app.infrastructure.env_check` inside
+# backend/) to validate whatever is actually set before relying on it.
 
-# --- Database (local development credentials only) ---
-POSTGRES_USER=commercial_ops
-POSTGRES_PASSWORD=commercial_ops_password        # override in any shared environment
-POSTGRES_DB=commercial_ops
-DATABASE_URL=postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops
-TEST_DATABASE_URL=postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test  # separate DB: tests truncate it
+# --- Database ---
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+POSTGRES_DB=
+DATABASE_URL=
+TEST_DATABASE_URL=
 
 # --- Behaviour ---
-LOG_LEVEL=INFO
-SEED_ANCHOR_DATE=            # empty = current date; pin it for reproducible data
-FRONTEND_ORIGIN=http://localhost:5173
+LOG_LEVEL=
+SEED_ANCHOR_DATE=
+FRONTEND_ORIGIN=
 ```
 
-**Política de secretos:** una variable puede tener valor por defecto únicamente si no es un secreto. Las credenciales de arriba son de desarrollo local, versionadas a propósito para que el proyecto arranque sin pasos manuales; no protegen nada en producción y ahí se inyectarían por el orquestador de despliegue. La SPEC 2 introduce `ANTHROPIC_API_KEY`, que sí es un secreto real: no tendrá valor por defecto y debe fallar de forma explícita si falta.
+**Política de secretos:** una variable puede tener valor por defecto únicamente si no es un secreto. Los defaults de desarrollo local viven en `docker-compose.yml` y en `Settings`, versionados a propósito para que el proyecto arranque sin pasos manuales; no protegen nada en producción y ahí se inyectarían por el orquestador de despliegue. La SPEC 2 introduce `ANTHROPIC_API_KEY`, que sí es un secreto real: no tendrá valor por defecto y debe fallar de forma explícita si falta.
+
+**Validación del entorno (`app/infrastructure/env_check.py`).** Un validador que se construye sobre `Settings` — nunca sobre una lista de nombres escrita a mano, que se desalinearía la primera vez que alguien agregue una variable. Instancia `Settings()`, captura `ValidationError` y reporta todos los problemas de una vez, no solo el primero. Además añade las comprobaciones que el sistema de tipos no puede expresar por sí solo: `TEST_DATABASE_URL` distinto de `DATABASE_URL`, `LOG_LEVEL` dentro de los niveles válidos de `logging`, `SEED_ANCHOR_DATE` vacío o una fecha ISO válida, y que `DATABASE_URL`/`TEST_DATABASE_URL` sean URLs con esquema y nombre de base de datos — estas tres últimas viven como `field_validator` en `Settings` mismo, así el propio arranque de la app se beneficia, no solo el script. Se ejecuta con `python -m app.infrastructure.env_check`: imprime una línea de confirmación y sale con código 0 si todo es válido, o una línea por problema (variable + qué está mal) y código distinto de 0 si no. `make check-env` lo invoca contra el backend siempre, y contra `frontend/` solo cuando ese directorio existe (mismo patrón `if [ -d frontend ]` que el resto del Makefile); `make up` depende de `check-env`, así un entorno roto falla antes de levantar ningún contenedor.
 
 Requisitos: el `Dockerfile` del backend no corre como root · `requirements.txt` con versiones fijadas · el volumen nombrado `pgdata` persiste los datos entre reinicios y se elimina por completo con `docker compose down -v` · `.env` en `.gitignore` · ninguna credencial real en el repositorio.
 
