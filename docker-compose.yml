@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    # Port 5432 is deliberately not published: reachable only inside the network.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-commercial_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-commercial_ops_password}
+      POSTGRES_DB: ${POSTGRES_DB:-commercial_ops}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Only runs on volume init: `docker compose down -v` is required after adding/changing scripts here.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-commercial_ops} -d ${POSTGRES_DB:-commercial_ops}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  backend:
+    build: ./backend
+    ports: ["8000:8000"]
+    # Mounts shadow the image's baked-in copy so the container always runs the working tree.
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops}
+      TEST_DATABASE_URL: ${TEST_DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      PYTHONDONTWRITEBYTECODE: "1"      # keep the container from writing .pyc into the host tree
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # Liveness, not readiness: a database blip must not restart the backend.
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  frontend:
+    build: ./frontend
+    ports: ["5173:5173"]
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:

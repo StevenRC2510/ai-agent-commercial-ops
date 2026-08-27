@@ -1,0 +1,23 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# S is flake8-bandit: security linting without adding another tool.
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "ANN", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may assert and may hardcode throwaway credentials.
+"tests/**" = ["S101", "S105", "S106", "ANN"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# Strict where the business rules live; pragmatic in adapters and tests.
+# Scoped to domain/application because that is the code a reviewer reads and the code
+# correctness depends on; adapters are thin and mostly typed by the frameworks they wrap.
+module = ["app.domain.*", "app.application.*"]
+disallow_untyped_defs = true

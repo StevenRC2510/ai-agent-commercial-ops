@@ -1,6 +1,15 @@
 .env
+.venv/
 __pycache__/
+*.pyc
 node_modules/
-backend/data/*.db
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
+htmlcov/
+dist/
+coverage/
+
+# Session planning scaffolding, not a deliverable — decisions ship in docs/adr/ and NOTES.md
+docs/superpowers/
