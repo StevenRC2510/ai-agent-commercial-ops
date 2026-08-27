@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.application.constants import Model
@@ -71,6 +71,13 @@ class Settings(BaseSettings):
             levels = ", ".join(VALID_LOG_LEVELS)
             raise ValueError(f"expected one of {levels} — got {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def require_api_key_unless_demo(self) -> "Settings":
+        """Fail at startup, not on a user's first message, when the only secret is missing."""
+        if not self.demo_mode and not self.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required unless DEMO_MODE=true")
+        return self
 
     @field_validator("seed_anchor_date")
     @classmethod
