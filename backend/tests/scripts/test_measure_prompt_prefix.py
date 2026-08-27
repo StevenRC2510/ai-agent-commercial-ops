@@ -36,7 +36,7 @@ def test_reaching_the_floor_exactly_counts_as_cacheable():
 
 
 def test_the_configured_model_cannot_cache_this_prefix():
-    """The measurement Task 11 exists to make: haiku's floor is far above the real prefix."""
+    """The measurement behind ADR 0011: haiku's floor is far above the real prefix."""
     assert measure_prefix(Role.SUPERVISOR, Model.HAIKU_4_5).verdict is Verdict.BELOW_FLOOR
 
 

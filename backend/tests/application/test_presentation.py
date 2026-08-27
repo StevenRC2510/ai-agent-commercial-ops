@@ -9,7 +9,7 @@ from app.domain.constants import ALLOWED_TRANSITIONS, OrderStatus
 
 def test_every_denial_reason_has_a_message():
     """Type-level bridge: mypy stops a reason not in the enum, this stops an enum member with
-    no message. Task 9 cannot add a denial code without both."""
+    no message. A new denial code cannot ship without both."""
     assert set(policy.DenialReason) == set(messages.DENIAL_TEXTS)
 
 
