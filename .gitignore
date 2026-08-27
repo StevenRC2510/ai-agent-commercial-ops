@@ -1,4 +1,10 @@
+# Secrets. .env.example ships (names only, never values) and is the documented template.
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
 .venv/
 __pycache__/
 *.pyc
@@ -10,6 +16,20 @@ node_modules/
 htmlcov/
 dist/
 coverage/
+.vite/
+
+# Test and browser-automation output, regenerated on every run.
+.playwright-mcp/
+playwright-report/
+test-results/
+*.log
 
 # Session planning scaffolding, not a deliverable — decisions ship in docs/adr/ and NOTES.md
 docs/superpowers/
+.superpowers/
+
+# Editor and OS noise, never one person's setup imposed on the next.
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
