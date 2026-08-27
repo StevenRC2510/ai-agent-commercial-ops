@@ -1,4 +1,4 @@
-"""Shared LLM vocabulary and price table. Everything imports these; nothing duplicates them."""
+"""Shared application vocabulary and tables. Everything imports these; nothing duplicates them."""
 
 from collections.abc import Mapping
 from decimal import Decimal
@@ -20,3 +20,9 @@ PRICES: Mapping[Model, tuple[Decimal, Decimal]] = {
     Model.SONNET_5: (Decimal("3.00"), Decimal("15.00")),
     Model.OPUS_5: (Decimal("5.00"), Decimal("25.00")),
 }
+
+# PRICES is quoted per million tokens, so every estimate divides by this.
+TOKENS_PER_PRICE_UNIT = Decimal(1_000_000)
+
+# Identifiers the model never needs to answer, stripped from every tool result (SPEC-2 §6.1).
+PERSONAL_FIELDS: frozenset[str] = frozenset({"email"})

@@ -1,6 +1,5 @@
 """The real LLMClient: wraps the official Anthropic SDK."""
 
-import re
 import time
 from typing import Any, cast
 
@@ -9,10 +8,11 @@ from anthropic.types import MessageParam, ToolParam
 
 from app.application.constants import Model
 from app.application.ports import LLMResponse
-
-_RETRYABLE = (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.InternalServerError)
-_RETRY_BACKOFF_SECONDS = 1.0  # base delay before the single retry
-_DATE_SUFFIX = re.compile(r"-\d{8}$")
+from app.infrastructure.llm.anthropic_constants import (
+    DATE_SUFFIX,
+    RETRY_BACKOFF_SECONDS,
+    RETRYABLE_ERRORS,
+)
 
 
 class UnknownModelError(RuntimeError):
@@ -26,7 +26,7 @@ def _normalize_model(wire_value: str) -> Model:
     except ValueError:
         pass
     try:
-        return Model(_DATE_SUFFIX.sub("", wire_value))
+        return Model(DATE_SUFFIX.sub("", wire_value))
     except ValueError as exc:
         raise UnknownModelError(f"Anthropic returned an unmapped model id: {wire_value!r}") from exc
 
@@ -58,8 +58,8 @@ class AnthropicClient:
     ) -> LLMResponse:
         try:
             return self._call(system=system, messages=messages, tools=tools, model=model)
-        except _RETRYABLE:
-            time.sleep(_RETRY_BACKOFF_SECONDS)
+        except RETRYABLE_ERRORS:
+            time.sleep(RETRY_BACKOFF_SECONDS)
             return self._call(system=system, messages=messages, tools=tools, model=model)
 
     def _call(

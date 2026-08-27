@@ -6,6 +6,7 @@ from sqlalchemy import text
 from app.domain.constants import OrderStatus
 from app.domain.models import Base, Client, Order, Payment
 from app.infrastructure import seed
+from app.infrastructure.seed_constants import ADVERSARIAL_CLIENT_NAME
 
 ANCHOR = date(2026, 6, 15)
 _TABLES = ", ".join(t.name for t in Base.metadata.sorted_tables)
@@ -49,7 +50,7 @@ def test_seed_covers_every_status(db, monkeypatch):
 def test_seed_stores_the_adversarial_client_name_verbatim(db, monkeypatch):
     """Injection payload is ordinary data. It must not be sanitised or escaped."""
     _seed(db, monkeypatch)
-    assert seed.ADVERSARIAL_CLIENT_NAME in {c.name for c in db.query(Client).all()}
+    assert ADVERSARIAL_CLIENT_NAME in {c.name for c in db.query(Client).all()}
 
 
 def test_seed_creates_the_balance_situations_the_spec_requires(db, monkeypatch) -> None:
