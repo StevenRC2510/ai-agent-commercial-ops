@@ -19,8 +19,6 @@ ALLOWED_TRANSITIONS: dict[OrderStatus, frozenset[OrderStatus]] = {
     OrderStatus.CANCELLED: frozenset(),
 }
 
-ROLES: tuple[str, ...] = ("operator", "supervisor")
-
 # Persisted values are English domain data; the end user reads Spanish.
 STATUS_LABELS_ES: dict[OrderStatus, str] = {
     OrderStatus.PENDING: "pendiente",

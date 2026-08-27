@@ -10,15 +10,12 @@ _PERMISSIONS_PATH = _APP_DIR / "application" / "permissions.py"
 _POLICY_PATH = _APP_DIR / "application" / "policy.py"
 _PRESENTATION_PATH = _APP_DIR / "application" / "presentation.py"
 
-# Pure type constructors only: no configuration, I/O, or state of their own,
-# so importing one cannot make the authorization table depend on anything.
-_ALLOWED_PERMISSIONS_IMPORTS = frozenset({"types"})
+# Pure type constructors: no config, I/O, or state, so importing one adds no dependency.
+_ALLOWED_PERMISSIONS_IMPORTS = frozenset({"types", "enum"})
 
-# `enum` is added here for DenialReason: a stdlib type constructor, same category as `types`.
 _ALLOWED_POLICY_IMPORT_PREFIXES = frozenset(
     {
         "dataclasses",
-        "enum",
         "types",
         "typing",
         "pydantic",
@@ -74,9 +71,9 @@ def test_permissions_module_is_pure_data() -> None:
     imported_modules = _imported_module_names(tree)
     disallowed = imported_modules - _ALLOWED_PERMISSIONS_IMPORTS
     assert imported_modules <= _ALLOWED_PERMISSIONS_IMPORTS, (
-        "permissions.py may only import pure type constructors like `types`: anything else "
-        "could make the authorization table depend on configuration, environment, or another "
-        f"module's state. Found beyond the allowed set: {disallowed}"
+        "permissions.py may only import pure type constructors like `types` and `enum`: "
+        "anything else could make the authorization table depend on configuration, "
+        f"environment, or another module's state. Found beyond the allowed set: {disallowed}"
     )
 
 

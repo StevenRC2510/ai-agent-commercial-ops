@@ -2,7 +2,6 @@ from app.domain.constants import (
     ALLOWED_TRANSITIONS,
     DEFAULT_ORDER_LIMIT,
     MAX_ORDER_LIMIT,
-    ROLES,
     STATUS_LABELS_ES,
     VALID_STATUSES,
     OrderStatus,
@@ -44,7 +43,3 @@ def test_no_status_transitions_to_itself():
 
 def test_limits_are_ordered():
     assert 0 < DEFAULT_ORDER_LIMIT <= MAX_ORDER_LIMIT
-
-
-def test_roles_are_exactly_operator_and_supervisor():
-    assert ROLES == ("operator", "supervisor")
