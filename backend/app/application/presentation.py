@@ -15,14 +15,6 @@ def render_denial(reason: str) -> str:
     return DENIAL_TEXTS[DenialReason(reason)]
 
 
-def denial_texts() -> dict[str, str]:
-    """The complete map of denial reason codes to their Spanish messages.
-
-    Exists so a test can assert this matches policy.DenialReason without an import.
-    """
-    return {reason.value: text for reason, text in DENIAL_TEXTS.items()}
-
-
 def render_summary(change: OrderStatusChange) -> str:
     """Consent sentence a supervisor approves before the write it describes executes."""
     old = STATUS_LABELS_ES[change.from_status]

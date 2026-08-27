@@ -24,6 +24,15 @@ def test_find_problems_reports_an_invalid_log_level(monkeypatch):
     assert any("LOG_LEVEL" in problem for problem in problems)
 
 
+def test_find_problems_reports_an_unknown_llm_model(monkeypatch):
+    """A typo'd or unpriced model must fail at startup, not mid-turn in `estimate_cost`."""
+    monkeypatch.setenv("LLM_MODEL", "claude-imaginary-9")
+
+    problems = env_check.find_problems()
+
+    assert any("LLM_MODEL" in problem for problem in problems)
+
+
 def test_find_problems_reports_a_malformed_seed_anchor_date(monkeypatch):
     monkeypatch.setenv("SEED_ANCHOR_DATE", "not-a-date")
 

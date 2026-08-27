@@ -1,3 +1,68 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /* One palette, two deliberate themes. Components never name a colour, only a role. */
+  :root {
+    color-scheme: light;
+    --canvas: 250 250 249;
+    --surface: 255 255 255;
+    --surface-raised: 255 255 255;
+    --surface-sunken: 239 238 235;
+    --line: 228 226 222;
+    --line-strong: 208 205 200;
+    --ink: 26 24 22;
+    --ink-muted: 87 83 78;
+    --ink-subtle: 118 112 107;
+    --accent: 13 118 110;
+    --accent-hover: 15 94 88;
+    --accent-fg: 255 255 255;
+    --accent-soft: 236 253 250;
+    --attention: 161 74 8;
+    --attention-soft: 254 248 235;
+    --attention-line: 240 208 152;
+    --positive: 4 145 100;
+    --danger: 200 30 60;
+    --shadow-color: 28 25 23;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --canvas: 11 11 13;
+      --surface: 23 23 26;
+      --surface-raised: 33 33 37;
+      --surface-sunken: 17 17 20;
+      --line: 44 44 49;
+      --line-strong: 63 63 69;
+      --ink: 245 245 244;
+      --ink-muted: 169 164 159;
+      --ink-subtle: 141 135 130;
+      --accent: 45 212 191;
+      --accent-hover: 94 234 212;
+      --accent-fg: 4 47 46;
+      --accent-soft: 17 46 44;
+      --attention: 252 211 77;
+      --attention-soft: 41 32 14;
+      --attention-line: 92 68 24;
+      --positive: 52 211 153;
+      --danger: 251 113 133;
+      --shadow-color: 0 0 0;
+    }
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    overflow: hidden;
+    background-color: rgb(var(--canvas));
+    color: rgb(var(--ink));
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}

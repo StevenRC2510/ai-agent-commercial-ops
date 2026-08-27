@@ -24,12 +24,22 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./backend/tests:/app/tests
+      - ./backend/scripts:/app/scripts
+      - ./backend/evals:/app/evals
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops}
       TEST_DATABASE_URL: ${TEST_DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test}
+      DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-5000}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      # The only secret: no default, so a missing key fails at startup instead of silently.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
+      CHAT_RATE_LIMIT_ENABLED: ${CHAT_RATE_LIMIT_ENABLED:-true}
+      CHAT_RATE_LIMIT_MAX_REQUESTS: ${CHAT_RATE_LIMIT_MAX_REQUESTS:-20}
+      CHAT_RATE_LIMIT_WINDOW_SECONDS: ${CHAT_RATE_LIMIT_WINDOW_SECONDS:-60}
       PYTHONDONTWRITEBYTECODE: "1"      # keep the container from writing .pyc into the host tree
     depends_on:
       db:

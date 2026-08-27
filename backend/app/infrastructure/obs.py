@@ -8,36 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.config import settings
-
-_LOGGER_NAME = "app"
-_RESERVED = frozenset(
-    {
-        "args",
-        "asctime",
-        "color_message",
-        "created",
-        "exc_info",
-        "exc_text",
-        "filename",
-        "funcName",
-        "levelname",
-        "levelno",
-        "lineno",
-        "module",
-        "msecs",
-        "message",
-        "msg",
-        "name",
-        "pathname",
-        "process",
-        "processName",
-        "relativeCreated",
-        "stack_info",
-        "thread",
-        "threadName",
-        "taskName",
-    }
-)
+from app.infrastructure.obs_constants import LOGGER_NAME, RESERVED_LOG_RECORD_FIELDS
 
 
 class JsonFormatter(logging.Formatter):
@@ -54,7 +25,7 @@ class JsonFormatter(logging.Formatter):
             if trace_id is not None:
                 payload["trace_id"] = trace_id
             for key, value in record.__dict__.items():
-                if key not in _RESERVED and key not in payload:
+                if key not in RESERVED_LOG_RECORD_FIELDS and key not in payload:
                     payload[key] = value
             return json.dumps(payload, ensure_ascii=False, default=str)
         except Exception as exc:
@@ -70,6 +41,7 @@ class JsonFormatter(logging.Formatter):
             return json.dumps(fallback)
 
 
+# Stays here: it references JsonFormatter, defined above in this module.
 LOGGING_CONFIG: dict[str, Any] = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -83,7 +55,7 @@ LOGGING_CONFIG: dict[str, Any] = {
         }
     },
     "loggers": {
-        _LOGGER_NAME: {"handlers": ["json"], "level": "INFO", "propagate": False},
+        LOGGER_NAME: {"handlers": ["json"], "level": "INFO", "propagate": False},
         "uvicorn": {"handlers": ["json"], "level": "INFO", "propagate": False},
         "uvicorn.error": {"handlers": ["json"], "level": "INFO", "propagate": False},
         "uvicorn.access": {"handlers": ["json"], "level": "INFO", "propagate": False},
@@ -118,10 +90,10 @@ def log(
     Never pass a secret or raw user text as a field value - log a length and a short hash instead.
     """
     for key in fields:
-        if key in _RESERVED:
+        if key in RESERVED_LOG_RECORD_FIELDS:
             raise ValueError(
                 f"Field name {key!r} collides with a reserved LogRecord attribute; rename it."
             )
-    logging.getLogger(_LOGGER_NAME).log(
+    logging.getLogger(LOGGER_NAME).log(
         level, event, extra={"event": event, "trace_id": trace_id, **fields}
     )

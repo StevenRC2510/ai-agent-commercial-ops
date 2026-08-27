@@ -18,9 +18,10 @@ def test_render_denial_returns_text_for_every_denial_reason(reason):
     assert presentation.render_denial(reason)
 
 
-def test_denial_texts_exposes_the_table_keyed_by_the_wire_string():
+def test_every_wire_reason_renders_exactly_its_table_text():
+    """The whole table, reached through the wire string the policy layer emits."""
     expected = {reason.value: text for reason, text in messages.DENIAL_TEXTS.items()}
-    assert presentation.denial_texts() == expected
+    assert {reason: presentation.render_denial(reason) for reason in expected} == expected
 
 
 def _change(from_status, to_status, reason="el taller ya lo recibio"):

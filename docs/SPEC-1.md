@@ -644,7 +644,7 @@ Requisitos: el `Dockerfile` del backend no corre como root · `requirements.txt`
 
 **`tests/architecture/test_imports.py`:** test AST de lista blanca sobre `application/policy.py` (ver sección 16, criterio 8).
 
-Cobertura mínima exigida en `application/policy.py`, `application/tools.py` y `application/presentation.py`: **90%**.
+Cobertura mínima exigida en todo el paquete `app.application`: **90%**. La medición es sobre el paquete completo (`--cov=app.application`), no una lista de archivos mantenida a mano: la SPEC 2 añade módulos a este paquete y el gate debe verlos automáticamente, igual que `_TABLES` se deriva de `Base.metadata` y `VALID_STATUSES` del enum en vez de mantenerse como listas separadas.
 
 ## 16. Criterios de aceptación
 
@@ -654,7 +654,7 @@ Desde un clon limpio del repositorio:
 2. `http://localhost:8000/health` responde `{"status":"ok"}`, y `http://localhost:8000/ready` responde `{"status":"ok"}` cuando la base de datos está disponible
 3. `http://localhost:5173` carga y muestra el estado del backend en verde
 4. `docker compose exec backend pytest -v` pasa al 100%
-5. `docker compose exec backend pytest --cov=app.application.policy --cov=app.application.tools --cov=app.application.presentation --cov-fail-under=90` pasa
+5. `docker compose exec backend pytest --cov=app.application --cov-fail-under=90` pasa
 6. Los logs de arranque son JSON válido, una línea por evento
 7. `grep -ri "sk-ant" .` no devuelve nada
 8. Un test AST (`tests/architecture/test_imports.py`) recorre **cada** archivo `.py` bajo `app/`, no solo `policy.py`, y hace cumplir la regla de dependencia hexagonal desde una tabla `(capa, prefijos prohibidos)`: `domain` no puede importar `app.application`/`app.infrastructure`/`app.api`; `application` no puede importar `app.infrastructure`/`app.api`; `infrastructure` no puede importar `app.api`; `api` puede importar cualquier cosa, por ser el adaptador más externo. `app/config.py`, `app/main.py` y `app/__main__.py` son la raíz de composición y están explícitamente exentos y nombrados en el test — no simplemente ignorados. Además, `policy.py` sigue validado contra una **lista blanca** cerrada (stdlib, `pydantic`, `sqlalchemy`, `app.domain.*`, `app.application.permissions`, `app.application.tool_args`); `domain` y `application` no pueden importar `fastapi`, `httpx`, `requests`, `anthropic`, `openai` ni `uvicorn` (`sqlalchemy` sí está permitido ahí, decisión registrada en ADR 0005); y `policy.py`/`tools.py` no pueden importar nada bajo `app.application.agent` — el futuro hogar del orquestador de la SPEC 2, que hoy no existe. Una lista negra no habría detectado ese último caso; la lista blanca sí, sin que nadie tenga que actualizar el test cuando la SPEC 2 añada `agent`

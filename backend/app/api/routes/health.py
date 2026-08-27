@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.api.schemas import HealthResponse, ReadyResponse
+from app.config import settings
 from app.infrastructure.db import engine
 
 router = APIRouter(tags=["health"])
@@ -23,7 +24,7 @@ def check_database() -> bool:
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     """Liveness. Touches nothing, so a database blip cannot restart us."""
-    return HealthResponse(status="ok")
+    return HealthResponse(status="ok", demo_mode=settings.demo_mode)
 
 
 @router.get("/ready", response_model=ReadyResponse)

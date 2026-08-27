@@ -3,13 +3,14 @@ validators enforce what plain `str` typing cannot, shared with env_check.py.
 """
 
 from datetime import date
+from decimal import Decimal
 from urllib.parse import urlparse
 
-from pydantic import field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Ordered from least to most severe, so error messages list them the way a human would.
-VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+from app.application.constants import Model
+from app.infrastructure.obs_constants import VALID_LOG_LEVELS
 
 
 def _require_url_with_database(value: str) -> str:
@@ -34,9 +35,28 @@ class Settings(BaseSettings):
     test_database_url: str = (
         "postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test"
     )
+    # Milliseconds; 0 is Postgres' own way to spell "no ceiling", so it needs no extra flag.
+    db_statement_timeout_ms: int = Field(default=5000, ge=0)
     log_level: str = "INFO"
     seed_anchor_date: str = ""
     frontend_origin: str = "http://localhost:5173"
+
+    # anthropic_api_key is the project's only real secret: no default beyond empty string.
+    anthropic_api_key: str = ""
+    llm_model: Model = Model.HAIKU_4_5
+    llm_temperature: float = 0.0
+    llm_timeout_seconds: int = 30
+    llm_max_iterations: int = 5
+    llm_max_tokens: int = 1024
+    max_cost_per_session_usd: Decimal = Decimal("1.00")
+    demo_mode: bool = False
+    max_message_chars: int = 2000
+    pending_action_ttl_seconds: int = 300
+    history_max_turns: int = 6
+    # A dedicated flag, not a zero: "0 requests" reads as "block everything", the opposite.
+    chat_rate_limit_enabled: bool = True
+    chat_rate_limit_max_requests: int = Field(default=20, ge=1)
+    chat_rate_limit_window_seconds: int = Field(default=60, ge=1)
 
     @field_validator("database_url")
     @classmethod
@@ -55,6 +75,13 @@ class Settings(BaseSettings):
             levels = ", ".join(VALID_LOG_LEVELS)
             raise ValueError(f"expected one of {levels} — got {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def require_api_key_unless_demo(self) -> "Settings":
+        """Fail at startup, not on a user's first message, when the only secret is missing."""
+        if not self.demo_mode and not self.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required unless DEMO_MODE=true")
+        return self
 
     @field_validator("seed_anchor_date")
     @classmethod

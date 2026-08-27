@@ -1,11 +1,27 @@
-# Commercial Operations Platform — SPEC 1
+# Commercial Operations Platform
 
-Plataforma determinista de operaciones comerciales para una PyME automotriz: modelo de
-datos, tres operaciones de negocio como funciones puras, y una capa de política que decide
-qué rol puede ejecutar qué — **sin ninguna integración con un LLM**. El modelo de lenguaje
-nunca es la autoridad sobre permisos; eso lo decide código Python determinista, testeado sin
-red ni credenciales. SPEC 2 (fuera de alcance aquí, ver `docs/SPEC-2.md`) añade el agente
-sobre esta base.
+Agente de operaciones comerciales para una PyME automotriz: consulta órdenes y saldos, y
+cambia el estado de una orden **solo cuando un humano lo autoriza explícitamente**.
+
+La idea que sostiene el diseño es una sola: **el modelo propone, la política decide.** El LLM
+nunca es la autoridad sobre permisos. Cada llamada a herramienta que propone pasa por
+`app/application/policy.py`, código Python determinista que no importa `anthropic`, `fastapi`
+ni `httpx` — y un test de arquitectura falla si alguien lo intenta. Por eso la capa de
+autorización se puede testear entera sin red y sin credenciales.
+
+De ahí se derivan las dos decisiones que más se notan al usarlo:
+
+- **La confirmación va fuera de banda.** Aprobar un cambio es un evento HTTP autenticado
+  sobre un identificador opaco de un solo uso, no escribir «sí» en el chat. Texto que el
+  modelo genera —o que un atacante inyecta en un dato— nunca puede valer como consentimiento.
+- **El consentimiento está atado al estado.** `/confirm` compara el estado actual contra el
+  que el usuario vio al aprobar. Si la orden se movió entre medias, se rechaza aunque la
+  transición siga siendo legal ([ADR 0009](docs/adr/0009-consent-bound-to-state.md)).
+
+`docs/SPEC-1.md` cubre la plataforma determinista; `docs/SPEC-2.md`, el agente, la API y el
+frontend. Las decisiones y sus porqués están en [`docs/adr/`](docs/adr/), y
+[`docs/conversaciones-ejemplo.md`](docs/conversaciones-ejemplo.md) muestra los flujos
+funcionando con transcripciones reales.
 
 ## Quickstart
 
@@ -14,8 +30,16 @@ git clone <repo-url> commercial-ops && cd commercial-ops
 docker compose up --build
 ```
 
-No hace falta crear ningún `.env`: todas las variables tienen un valor de desarrollo por
-defecto en `docker-compose.yml` (ver `.env.example` para el contrato completo de nombres).
+**Funciona sin API key.** `DEMO_MODE` viene activado por defecto y sustituye al modelo por un
+cliente determinista guiado por palabras clave que cubre los tres flujos completos, incluida
+la tarjeta de confirmación. No hace falta crear ningún `.env`: todas las variables tienen un
+valor de desarrollo por defecto en `docker-compose.yml` (ver `.env.example` para el contrato
+completo de nombres). Es una decisión de producto —permite evaluar el sistema sin
+credenciales ni costo—, no un atajo de tests.
+
+Para usar el modelo real, pon `ANTHROPIC_API_KEY` y `DEMO_MODE=false` en un `.env`. Si falta
+la clave con `DEMO_MODE=false`, la aplicación **no arranca**: falla al construir la
+configuración en vez de romperse en la primera conversación del usuario.
 
 - Backend: http://localhost:8000/health y http://localhost:8000/ready
 - Frontend: http://localhost:5173
@@ -49,15 +73,16 @@ lista blanca cerrada de imports permitidos — no una lista negra, para que un i
 indebido falle el test en vez de colarse. `app/config.py`, `app/main.py` y `app/__main__.py`
 son la raíz de composición y están explícitamente exentos y nombrados en ese mismo test.
 
-El frontend sigue un layout por feature (ADR 0004): en esta fase solo existe el andamiaje
-(`shared/ui/HealthIndicator`, `shared/lib/httpClient` validado con Zod, `QueryProvider`);
-`features/chat/` queda reservado y vacío para SPEC 2.
+El frontend sigue un layout por feature (ADR 0004) con interior hexagonal: `features/chat/`
+tiene su `domain/`, `application/` (los hooks), `infrastructure/` (el `ChatGateway` con dos
+implementaciones) y `ui/`, y solo se importa por su `index.ts`. ESLint impide que `ui/`
+alcance un adaptador o `react-query` directamente, para que la UI consuma hooks y no
+transporte.
 
 ## Decisiones técnicas
 
 Cada decisión de fondo tiene su ADR en `docs/adr/`; aquí solo el enlace y el porqué en una
-línea. El detalle día a día — ambigüedades resueltas, abstracciones descartadas,
-limitaciones — está en `NOTES.md`.
+línea.
 
 - [ADR 0001](docs/adr/0001-postgresql-over-sqlite.md) — PostgreSQL, no SQLite: `Numeric` exacto para dinero, sin coerción a `float`.
 - [ADR 0002](docs/adr/0002-out-of-band-write-confirmation.md) — confirmación de escritura fuera de banda (SPEC 2): el consentimiento es HTTP, no texto de chat.
@@ -69,6 +94,7 @@ limitaciones — está en `NOTES.md`.
 - [ADR 0008](docs/adr/0008-no-model-router.md) — sin router de modelos (SPEC 2): una sola tarea, un solo modelo configurado.
 - [ADR 0009](docs/adr/0009-consent-bound-to-state.md) — el consentimiento se ata al estado, no solo a la acción (SPEC 2): "legal" no es lo mismo que "lo que la persona aprobó".
 - [ADR 0010](docs/adr/0010-no-streaming.md) — sin streaming (SPEC 2): un bloque `tool_use` no puede mostrarse a medio dibujar cuando la política aún puede denegarlo.
+- [ADR 0011](docs/adr/0011-no-prompt-caching.md) — sin prompt caching: el prefijo cacheable queda tres veces por debajo del mínimo del modelo, medido antes de decidir.
 
 ## Calidad de código
 
@@ -89,7 +115,7 @@ y `npm audit --audit-level=high` corren en CI (`.github/workflows/ci.yml`). Hoy,
 fijó a una versión traída por un `fastapi` cuya propia restricción la admite (nunca una
 `starlette` forzada contra el rango de un `fastapi` viejo), y `pip`/`setuptools` — que no son
 dependencias de ningún `requirements*.txt`, sino parte de la imagen base — se fijan
-explícitamente en el `Dockerfile`. Ver `NOTES.md` para el detalle versión por versión.
+explícitamente en el `Dockerfile`.
 
 El comando único para lint + tests + cobertura:
 
@@ -132,7 +158,118 @@ parametriza los 4 estados × 4 estados de `ALLOWED_TRANSITIONS` — no una muest
 completa — porque cualquier transición no cubierta es exactamente el tipo de permiso que un
 supervisor podría ejercer sin que ningún test lo hubiera visto nunca.
 
+## Evaluación del agente
+
+Los tests de comportamiento verifican lógica determinista con `ScriptedClient`. La suite de
+`backend/evals/` mide otra cosa: **el modelo real**. Son 15 casos en
+`backend/evals/cases.yaml`, anclados en los datos del seed
+(`backend/app/infrastructure/seed_constants.py`), repartidos en seis categorías: selección de
+herramienta (5), ambigüedad (2), autorización (2), inyección de prompt (2), grounding (2) y
+confirmación (2).
+
+```bash
+make eval                                        # el modelo de LLM_MODEL
+make eval EVAL_ARGS="--model claude-sonnet-5"    # otro modelo, para la tabla comparativa
+```
+
+**Qué necesita:** `DEMO_MODE=false`, una `ANTHROPIC_API_KEY` con saldo, y red. Cuesta dinero,
+así que **no corre en CI**. Escribe filas de auditoría (los rechazos se auditan) y ninguna
+orden cambia de estado, pero conviene `make reset` después para dejar la demo repetible.
+
+**Qué no hace:** caer al cliente falso. Si falta la clave o `DEMO_MODE` está activo, se planta
+y explica por qué, en vez de puntuar nuestro propio matcher de palabras clave y llamarlo
+resultado (`backend/evals/preflight.py`):
+
+```
+make eval cannot run:
+  - DEMO_MODE is on, so the fake client would answer every case. Scoring it would
+    measure our own keyword matcher, not a model. Set DEMO_MODE=false.
+
+No cases were run and no results were produced. This suite measures the real model on
+purpose: it needs DEMO_MODE=false, a funded ANTHROPIC_API_KEY, and network access.
+```
+
+**Cómo puntúa.** Nunca compara la prosa del modelo contra un texto fijo: un modelo que dice lo
+correcto con otras palabras pasa. Cada aserción mira un hecho observable — qué herramienta se
+propuso y con qué argumentos, el `type` del turno, el `reason_code` de la política, el estado
+de la orden en la base antes y después, y las filas de `audit_log` de ese `trace_id`. El único
+número que se compara contra el texto es una cifra de dinero, y el valor esperado se lee de la
+base en tiempo de ejecución, no está escrito en el fichero de casos
+(`backend/evals/scoring.py`).
+
+**Resultados medidos: ninguno todavía.** La cuenta de Anthropic del proyecto tiene saldo cero.
+Ni siquiera `/v1/messages/count_tokens` responde:
+
+```
+HTTP 400 — "Your credit balance is too low to access the Anthropic API."
+```
+
+El arnés, los 15 casos, la puntuación y el reporte están construidos y probados; la tabla
+comparativa de modelos que pide `docs/SPEC-2.md` §5.2 y el reporte de §11.1 quedan **vacíos a
+propósito**. Aquí no hay ninguna cifra estimada ni ningún placeholder: cuando falta un número,
+es que nadie lo midió.
+
+Los 117 tests de `backend/tests/evals/` prueban el arnés — la aritmética del resumen, la carga
+del fichero de casos, el renderizado y la negativa a arrancar sin clave — con dobles, y están
+etiquetados como tests del arnés en su docstring. No son resultados de evaluación.
+
+## Costo y prompt caching
+
+Cada turno acumula su costo en la sesión y hay un tope por conversación
+(`MAX_COST_PER_SESSION_USD`). El costo se contabiliza en **las siete rutas de salida** de
+`run_turn`, no solo en la exitosa: un turno que termina en confirmación pendiente o en error
+también gastó tokens, y no contarlos haría que el tope saltara tarde o nunca.
+
+Ese tope protege una conversación, no la cuenta: cien sesiones nuevas la vaciarían igual. Por
+eso `/chat` lleva además un límite por usuario (`CHAT_RATE_LIMIT_*`), y una sesión nueva no
+compra presupuesto nuevo. `/confirm` queda deliberadamente fuera: no gasta tokens, ya está
+limitado de forma transitiva —solo se llega con un `pending_id` que únicamente un `/chat`
+exitoso puede emitir— y bloquearlo dejaría al usuario sin poder aprobar una tarjeta que ya
+recibió, lo que **aumentaría** el gasto al obligarle a repetir la petición.
+
+Sobre prompt caching, la decisión fue **no activarlo**, y se tomó midiendo:
+
+```bash
+make measure-prompt
+```
+
+```
+role        tools  system  schemas  total   est. tokens  floor at  verdict
+operator        2    1509     1656   3165      792-1266     0.773  below_floor
+supervisor      3    1511     2566   4077     1020-1631     0.995  below_floor
+```
+
+El prefijo cacheable —system prompt más los esquemas de herramientas— queda entre tres y
+cuatro veces por debajo del mínimo de 4.096 tokens de `claude-haiku-4-5`. La columna
+`floor at` es lo que hace la conclusión sólida: el prefijo más grande solo alcanzaría el
+umbral a 0,995 caracteres por token, es decir, si el tokenizador produjera más de un token por
+carácter. La conclusión no depende del ratio estimado. Activar `cache_control` no cachearía
+nada, y afirmar una optimización inerte es peor que no tenerla — el razonamiento completo y
+qué cambiaría la respuesta están en
+[ADR 0011](docs/adr/0011-no-prompt-caching.md).
+
 ## Limitaciones
 
-Las limitaciones conocidas, las ambigüedades resueltas y las abstracciones deliberadamente no
-construidas están documentadas en `NOTES.md`, para no duplicarlas aquí.
+- **Los evals nunca han corrido contra un modelo real.** El arnés, los 15 casos y la
+  puntuación están construidos y probados, pero la cuenta de Anthropic no tiene saldo y ni
+  `count_tokens` responde. La afirmación que más valdría — que el modelo real no obedece la
+  carga de inyección que viaja en el nombre de un cliente — es justo la que no se puede
+  sostener sin ejecutarla. No hay ninguna cifra estimada en su lugar.
+- **`AuditLog` es inmutable por convención, no por permiso de base de datos.** No existe
+  todavía un `REVOKE UPDATE, DELETE` a nivel de rol de Postgres, así que una credencial de
+  aplicación comprometida podría en teoría alterar el historial.
+- **La identidad es una cabecera sin autenticar** (`X-User-Role`, `X-User-Id`), un sustituto
+  de un claim JWT verificado. Cambiarla por autenticación real toca un único adaptador —
+  donde `api/deps.py` extrae `actor` y `role` — y cero líneas de `policy.py`.
+- **Las conversaciones viven en memoria y se pierden al reiniciar.** `ConversationStore` es un
+  diccionario en proceso, así que tampoco se comparte entre réplicas. Persistirlas es una tabla
+  y un adaptador que implemente la misma interfaz; nada de la política ni del orquestador
+  cambia, porque ninguno de los dos sabe dónde vive el historial.
+- **El versionado de prompt está a medias.** `PROMPT_VERSION` viaja en los logs y en el reporte
+  de evals, pero nada correlaciona todavía una versión con sus resultados — que es para lo que
+  existe: cambiar el prompt, subir la versión, volver a medir y comparar. La segunda mitad no
+  puede existir mientras no haya habido una primera corrida contra el modelo real.
+- **Un solo idioma.** El enunciado describe una concesionaria hispanohablante. Añadir i18n no
+  sería trabajo de traducción: la frase del consentimiento se compone en el servidor y **es**
+  el artefacto de auditoría, así que el idioma tendría que llegar como campo explícito de la
+  petición y quedar guardado junto al cambio estructurado y la frase renderizada.

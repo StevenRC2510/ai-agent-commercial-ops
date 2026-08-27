@@ -12,6 +12,13 @@ def test_health_returns_ok():
     assert response.json()["status"] == "ok"
 
 
+def test_health_reports_whether_the_demo_llm_is_wired():
+    """The frontend shows a badge when no real model is answering."""
+    from app.config import settings
+
+    assert client.get("/health").json()["demo_mode"] is settings.demo_mode
+
+
 def test_health_does_not_touch_the_database(monkeypatch):
     """Liveness must stay green while Postgres is briefly unavailable."""
     from app.api.routes import health as health_route

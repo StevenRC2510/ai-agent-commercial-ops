@@ -1,18 +1,10 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-interface ErrorBoundaryProps {
-  children: ReactNode;
-}
+import type { ErrorBoundaryProps, ErrorBoundaryState } from "./ErrorBoundary.types";
+import { BODY, FALLBACK_BODY, FALLBACK_TITLE, TITLE, WRAPPER } from "./ErrorBoundary.constants";
 
-interface ErrorBoundaryState {
-  hasError: boolean;
-}
-
-/** Renders an explicit Spanish fallback instead of a blank screen on an unhandled render error. */
-export class ErrorBoundary extends Component<
-  ErrorBoundaryProps,
-  ErrorBoundaryState
-> {
+// The only class in the codebase: React offers no hook for componentDidCatch.
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(): ErrorBoundaryState {
@@ -20,21 +12,15 @@ export class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error(
-      "Unhandled error in the frontend tree:",
-      error,
-      info.componentStack,
-    );
+    console.error("Unhandled error in the frontend tree:", error, info.componentStack);
   }
 
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div role="alert" className="p-8">
-          <h1 className="text-xl font-semibold">Algo salió mal</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Ocurrió un error inesperado. Intenta recargar la página.
-          </p>
+        <div role="alert" className={WRAPPER}>
+          <h1 className={TITLE}>{FALLBACK_TITLE}</h1>
+          <p className={BODY}>{FALLBACK_BODY}</p>
         </div>
       );
     }

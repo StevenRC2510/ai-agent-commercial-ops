@@ -4,24 +4,26 @@ import { cn } from "@/shared/lib/cn";
 import { getValidated } from "@/shared/lib/httpClient";
 
 import {
+  DOT,
+  DOT_STYLES,
   HEALTH_QUERY_KEY,
   STATE_LABELS,
-  STATE_STYLES,
+  STATUS,
   healthSchema,
 } from "./HealthIndicator.constants";
 import type { HealthState } from "./HealthIndicator.types";
 
-function resolveState(
+const resolveState = (
   isPending: boolean,
   isError: boolean,
   status: string | undefined,
-): HealthState {
+): HealthState => {
   if (isPending) return "loading";
   if (isError || status !== "ok") return "offline";
   return "online";
-}
+};
 
-export function HealthIndicator() {
+export const HealthIndicator = () => {
   const { data, isPending, isError } = useQuery({
     queryKey: HEALTH_QUERY_KEY,
     queryFn: ({ signal }) => getValidated("/health", healthSchema, signal),
@@ -30,12 +32,9 @@ export function HealthIndicator() {
   const state = resolveState(isPending, isError, data?.status);
 
   return (
-    <p
-      role="status"
-      aria-live="polite"
-      className={cn("text-sm font-medium", STATE_STYLES[state])}
-    >
-      Backend: {STATE_LABELS[state]}
+    <p role="status" aria-live="polite" className={STATUS}>
+      <span aria-hidden="true" className={cn(DOT, DOT_STYLES[state])} />
+      {STATE_LABELS[state]}
     </p>
   );
-}
+};

@@ -11,9 +11,9 @@ enrutamiento distinto por caso.
 ## Decisión
 
 No hay router. Un único modelo, configurado en `LLM_MODEL`, atiende todas las tareas. La
-única flexibilidad es que `LLMClient.create()` acepta un parámetro `model` opcional que por
-defecto toma `settings.llm_model` — suficiente para pasar un modelo distinto desde un test o
-un script de evals, sin construir ninguna lógica de selección.
+única flexibilidad es que el modelo se fija al construir el cliente — usar otro desde un test
+o un script de evals es instanciar un `AnthropicClient` con esa configuración distinta, sin
+ninguna lógica de selección.
 
 ## Consecuencias
 

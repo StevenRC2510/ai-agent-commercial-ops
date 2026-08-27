@@ -1,12 +1,14 @@
 """AST-based checks on the import graph of application-layer modules."""
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
 
 _BACKEND_DIR = Path(__file__).resolve().parents[2]
 _APP_DIR = _BACKEND_DIR / "app"
+
 _PERMISSIONS_PATH = _APP_DIR / "application" / "permissions.py"
 _POLICY_PATH = _APP_DIR / "application" / "policy.py"
 _PRESENTATION_PATH = _APP_DIR / "application" / "presentation.py"
@@ -14,6 +16,9 @@ _TOOLS_PATH = _APP_DIR / "application" / "tools.py"
 
 # Pure type constructors: no config, I/O, or state, so importing one adds no dependency.
 _ALLOWED_PERMISSIONS_IMPORTS = frozenset({"types", "enum"})
+
+_CONSTANTS_PATH = _APP_DIR / "application" / "constants.py"
+_ALLOWED_CONSTANTS_IMPORTS = frozenset({"collections.abc", "decimal", "enum"})
 
 # SPEC 2's orchestrator home. It does not exist yet; policy and tools must never reach it.
 _AGENT_ORCHESTRATOR_PREFIX = "app.application.agent"
@@ -53,6 +58,78 @@ _FORBIDDEN_CORE_LIBRARY_ROOTS = frozenset(
     {"fastapi", "httpx", "requests", "anthropic", "openai", "uvicorn"}
 )
 _CORE_LAYER_DIRS = (_APP_DIR / "domain", _APP_DIR / "application")
+
+_CONSTANT_NAME = re.compile(r"^_*[A-Z][A-Z0-9_]*$")
+_MAPPING_GENERICS = frozenset({"Mapping", "MutableMapping", "dict", "Dict"})
+
+# (relative path, constant name): a genuine exception, not a silent hole. Its keys are
+# logging.config.dictConfig's schema, a stdlib vocabulary we do not define or enumerate.
+_MAPPING_KEY_EXEMPTIONS = frozenset({("app/infrastructure/obs.py", "LOGGING_CONFIG")})
+
+
+def _node_name(node: ast.expr) -> str | None:
+    """The bare name a node refers to, whether written plain or as `module.name`."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _mapping_key_violations(tree: ast.Module, relative_path: str) -> list[str]:
+    """Module-level `NAME: Mapping[str, ...] = ...`-shaped constants, str-keyed ones only."""
+    violations = []
+    for node in tree.body:
+        if not (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)):
+            continue
+        name = node.target.id
+        if not _CONSTANT_NAME.match(name):
+            continue
+        annotation = node.annotation
+        if not isinstance(annotation, ast.Subscript):
+            continue
+        if _node_name(annotation.value) not in _MAPPING_GENERICS:
+            continue
+        key_type = (
+            annotation.slice.elts[0]
+            if isinstance(annotation.slice, ast.Tuple) and annotation.slice.elts
+            else None
+        )
+        if (relative_path, name) in _MAPPING_KEY_EXEMPTIONS:
+            continue
+        if isinstance(key_type, ast.Name) and key_type.id == "str":
+            violations.append(
+                f"{relative_path}: {name} is keyed by 'str'. Mapping constants must be "
+                "keyed by an Enum so an invalid key fails at import or validation time, "
+                "not at lookup."
+            )
+    return violations
+
+
+def test_mapping_constants_are_keyed_by_enum() -> None:
+    """A str-keyed constant table lets a typo fail silently at lookup instead of loudly."""
+    violations = []
+    for path in sorted(_APP_DIR.rglob("*.py")):
+        relative_path = str(path.relative_to(_BACKEND_DIR))
+        violations.extend(_mapping_key_violations(ast.parse(path.read_text()), relative_path))
+    assert not violations, "\n".join(violations)
+
+
+def test_mapping_key_exemptions_are_not_silent_holes() -> None:
+    """Every exemption must still exist and still be str-keyed, or it is dead configuration."""
+    for relative_path, name in _MAPPING_KEY_EXEMPTIONS:
+        path = _BACKEND_DIR / relative_path
+        tree = ast.parse(path.read_text())
+        found = any(
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == name
+            for node in tree.body
+        )
+        assert found, (
+            f"{relative_path}: exempted constant {name!r} no longer exists — "
+            "remove the exemption or restore the constant."
+        )
 
 
 def _imported_module_names(tree: ast.Module) -> set[str]:
@@ -100,6 +177,17 @@ def test_permissions_module_is_pure_data() -> None:
         "permissions.py may only import pure type constructors like `types` and `enum`: "
         "anything else could make the authorization table depend on configuration, "
         f"environment, or another module's state. Found beyond the allowed set: {disallowed}"
+    )
+
+
+def test_constants_module_is_pure_data() -> None:
+    """The price table depends on nothing, so no environment can move a price."""
+    imported_modules = _imported_module_names(ast.parse(_CONSTANTS_PATH.read_text()))
+    disallowed = imported_modules - _ALLOWED_CONSTANTS_IMPORTS
+    assert imported_modules <= _ALLOWED_CONSTANTS_IMPORTS, (
+        "constants.py may only import pure type constructors like `enum` and `decimal`: "
+        "anything else could make the price table depend on configuration, environment, "
+        f"or another module's state. Found beyond the allowed set: {disallowed}"
     )
 
 
@@ -166,6 +254,18 @@ def test_domain_and_application_never_import_framework_or_transport_libraries() 
                 f"{path.relative_to(_BACKEND_DIR)} imports {sorted(offending)}: the domain "
                 "and application layers must stay free of framework and transport libraries."
             )
+
+
+def test_no_module_under_app_imports_the_eval_harness() -> None:
+    """evals/ composes the whole application, so the arrow may never point back at it."""
+    forbidden = frozenset({"evals"})
+    for path in sorted(_APP_DIR.rglob("*.py")):
+        imported = _imported_module_names(ast.parse(path.read_text()))
+        offending = {name for name in imported if _matches_any_prefix(name, forbidden)}
+        assert not offending, (
+            f"{path.relative_to(_BACKEND_DIR)} imports {offending}: the evaluation harness "
+            "is a caller of the application, never part of it."
+        )
 
 
 def test_policy_and_tools_never_import_the_future_agent_orchestrator() -> None:

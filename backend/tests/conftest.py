@@ -3,6 +3,8 @@
 behaviour a savepoint would hide. Never request both in the same test.
 """
 
+from datetime import date
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
@@ -10,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.domain.context import AuditContext
 from app.domain.models import Base
+from app.infrastructure import seed
+
+_SEED_ANCHOR = date(2026, 6, 15)
 
 _TABLES = ", ".join(t.name for t in Base.metadata.sorted_tables)
 
@@ -62,3 +67,11 @@ def db_real(engine):
 @pytest.fixture
 def audit_ctx() -> AuditContext:
     return AuditContext(actor="u-test", role="supervisor", trace_id="abc12345")
+
+
+@pytest.fixture
+def seeded(db, monkeypatch):
+    """Seeds the savepoint-isolated `db` with the anchor pinned, for reproducible dates."""
+    monkeypatch.setattr(seed, "anchor_date", lambda: _SEED_ANCHOR)
+    seed.seed_if_empty(db)
+    return db

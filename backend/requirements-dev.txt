@@ -7,3 +7,6 @@ ruff==0.8.6
 mypy==1.14.1
 pip-audit==2.7.3
 pre-commit==4.0.1
+# Only evals/ reads YAML; the service itself never parses a file at runtime.
+pyyaml==6.0.2
+types-PyYAML==6.0.12.20241230
