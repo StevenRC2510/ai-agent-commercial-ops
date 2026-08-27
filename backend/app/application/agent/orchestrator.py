@@ -54,6 +54,8 @@ class TurnResult:
     pending_id: str | None = None
     pending_summary: str | None = None
     telemetry: dict[str, Any] | None = None
+    # Only a final message carries it: a card awaits consent, an error already says `error`.
+    reason_code: str | None = None
 
 
 def wrap_untrusted(payload: dict[str, JSONValue]) -> str:
@@ -161,6 +163,8 @@ def run_turn(
     """
     # What this turn spends, separate from what the session already spent. Never a default.
     turn_cost = _ZERO_COST
+    # Tool -> the refusal standing against it; an allowed call to that same tool clears it.
+    standing_denials: dict[str, str] = {}
 
     if len(user_message) > settings.max_message_chars:
         return TurnResult(
@@ -236,6 +240,8 @@ def run_turn(
                 trace_id=trace_id,
                 cost_usd=turn_cost,
                 telemetry=telemetry,
+                # The first tool still refused: the client only needs to know it was refused.
+                reason_code=next(iter(standing_denials.values()), None),
             )
 
         tool_results: list[dict[str, Any]] = []
@@ -274,7 +280,10 @@ def run_turn(
                         "is_error": True,
                     }
                 )
+                standing_denials[tool_name] = decision.reason
                 continue
+
+            standing_denials.pop(tool_name, None)
 
             if decision.requires_confirmation:
                 return _confirmation_result(

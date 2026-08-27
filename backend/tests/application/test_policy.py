@@ -63,6 +63,21 @@ def test_unknown_tool_is_checked_before_role(db):
     assert policy.evaluate("drop_database", {}, "not-a-role", db).reason == "unknown_tool"
 
 
+def test_a_role_denial_never_reveals_whether_the_order_exists(db):
+    """What makes the reason safe to return over HTTP: role is decided before any state is read.
+
+    A caller without permission learns only that, never whether order 999999 exists.
+    """
+    decision = policy.evaluate(
+        policy.ToolName.UPDATE_ORDER_STATUS,
+        {"order_id": 999999, "new_status": "delivered", "reason": "motivo valido"},
+        policy.Role.OPERATOR,
+        db,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "role_lacks_permission"
+
+
 def test_role_is_checked_before_arguments(db):
     decision = policy.evaluate(
         policy.ToolName.UPDATE_ORDER_STATUS, {"garbage": True}, policy.Role.OPERATOR, db

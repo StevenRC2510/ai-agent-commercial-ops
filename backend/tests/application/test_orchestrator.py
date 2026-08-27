@@ -20,12 +20,12 @@ from app.application.messages import (
     FALLBACK_INPUT_TOO_LONG,
     FALLBACK_MAX_ITERATIONS,
 )
-from app.application.permissions import Role, ToolName
+from app.application.permissions import DenialReason, Role, ToolName
 from app.application.policy import PolicyDecision
 from app.application.ports import LLMResponse
 from app.application.pricing import estimate_cost
 from app.domain.constants import OrderStatus
-from app.domain.models import AuditLog, Order
+from app.domain.models import AuditLog, Client, Order
 from app.infrastructure.llm.scripted import ScriptedClient
 from app.infrastructure.pending.memory import InMemoryPendingActionStore
 
@@ -589,6 +589,135 @@ def test_the_iteration_cap_reports_every_call_it_paid_for(db, seeded):
     )
     assert result.text == FALLBACK_MAX_ITERATIONS
     assert result.cost_usd == _cost(10, 5) * 5
+
+
+def _write_args(order_id: int, new_status: str = "delivered") -> dict[str, Any]:
+    return {"order_id": order_id, "new_status": new_status, "reason": "motivo valido"}
+
+
+def test_a_refused_turn_reports_the_denial_reason(db, seeded):
+    """The gap this closes: a refusal must be machine-readable, not only Spanish prose."""
+    llm = ScriptedClient(
+        [
+            _response_with(_tool_use(ToolName.UPDATE_ORDER_STATUS, _write_args(1))),
+            _text_response("Tu rol no tiene permiso para esta operación."),
+        ]
+    )
+    result = _run(
+        user_message="cambia la orden #1 a entregada",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "message"
+    assert result.reason_code == DenialReason.ROLE_LACKS_PERMISSION.value
+
+
+def test_an_ordinary_answer_carries_no_reason_code(db, seeded):
+    """Without this, every answer would read as a denial and the signal would be worthless."""
+    llm = ScriptedClient(
+        [
+            _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {"limit": 5})),
+            _text_response("Hay 5 órdenes."),
+        ]
+    )
+    result = _run(
+        user_message="dame órdenes",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "message"
+    assert result.reason_code is None
+
+
+def test_a_refusal_stands_even_when_another_tool_in_the_same_turn_succeeds(db, seeded):
+    """Partial refusal is still refusal: a client must never read the success as consent."""
+    client_id = db.query(Client).first().id
+    mixed = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            _tool_use(ToolName.UPDATE_ORDER_STATUS, _write_args(1)),
+            {
+                "type": "tool_use",
+                "id": "tu-2",
+                "name": ToolName.GET_CLIENT_BALANCE.value,
+                "input": {"client_id": client_id},
+            },
+        ],
+        input_tokens=10,
+        output_tokens=5,
+        model="claude-haiku-4-5",
+    )
+    llm = ScriptedClient([mixed, _text_response("No puedo cambiarla, pero el saldo es X.")])
+    result = _run(
+        user_message="cambia la orden #1 y dame el saldo",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.reason_code == DenialReason.ROLE_LACKS_PERMISSION.value
+
+
+def test_a_repaired_call_clears_the_refusal_it_replaces(db, seeded):
+    """The model fixed its own arguments, so the user was never refused anything."""
+    llm = ScriptedClient(
+        [
+            _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {"limit": -5})),
+            _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {"limit": 5})),
+            _text_response("Hay 5 órdenes."),
+        ]
+    )
+    result = _run(
+        user_message="dame órdenes",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.reason_code is None
+
+
+def test_a_confirmation_card_is_never_labelled_a_refusal(db, seeded):
+    """A turn awaiting consent was not refused; tagging it would style the card as a denial."""
+    order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
+    mixed = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            {
+                "type": "tool_use",
+                "id": "tu-2",
+                "name": ToolName.GET_CLIENT_BALANCE.value,
+                "input": {"client_id": -1},
+            },
+            _tool_use(ToolName.UPDATE_ORDER_STATUS, _write_args(order.id)),
+        ],
+        input_tokens=10,
+        output_tokens=5,
+        model="claude-haiku-4-5",
+    )
+    result = _run(
+        user_message="dame el saldo y marca la orden como entregada",
+        role=Role.SUPERVISOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=ScriptedClient([mixed]),
+        trace_id="abc12345",
+    )
+    assert result.type == "confirmation_required"
+    assert result.reason_code is None
 
 
 def test_cost_usd_has_no_default_a_missing_value_must_fail_construction() -> None:
