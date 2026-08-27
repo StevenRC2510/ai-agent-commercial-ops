@@ -4,6 +4,8 @@ import { cn } from "@/shared/lib/cn";
 import { getValidated } from "@/shared/lib/httpClient";
 
 import {
+  DEMO_BADGE,
+  DEMO_LABEL,
   DOT,
   DOT_STYLES,
   HEALTH_QUERY_KEY,
@@ -32,9 +34,12 @@ export const HealthIndicator = () => {
   const state = resolveState(isPending, isError, data?.status);
 
   return (
-    <p role="status" aria-live="polite" className={STATUS}>
-      <span aria-hidden="true" className={cn(DOT, DOT_STYLES[state])} />
-      {STATE_LABELS[state]}
-    </p>
+    <>
+      <p role="status" aria-live="polite" className={STATUS}>
+        <span aria-hidden="true" className={cn(DOT, DOT_STYLES[state])} />
+        {STATE_LABELS[state]}
+      </p>
+      {data?.demo_mode ? <span className={DEMO_BADGE}>{DEMO_LABEL}</span> : null}
+    </>
   );
 };
