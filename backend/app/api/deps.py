@@ -12,14 +12,14 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.application.messages import DEMO_MODE_REPLY, UNAUTHENTICATED
+from app.application.messages import UNAUTHENTICATED
 from app.application.permissions import Role
-from app.application.ports import LLMClient, LLMResponse, PendingActionStore
+from app.application.ports import LLMClient, PendingActionStore
 from app.config import settings
 from app.domain.context import AuditContext
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.llm.anthropic import AnthropicClient
-from app.infrastructure.llm.scripted import ScriptedClient
+from app.infrastructure.llm.demo import DemoClient
 from app.infrastructure.pending.memory import InMemoryPendingActionStore
 from app.infrastructure.session.memory import ConversationStore
 
@@ -60,19 +60,6 @@ def get_context(
     return AuditContext(actor=x_user_id, role=x_user_role, trace_id=request.state.trace_id)
 
 
-def demo_script() -> list[LLMResponse]:
-    """A fresh script per request: DEMO_MODE answers without a key and without cost."""
-    return [
-        LLMResponse(
-            stop_reason="end_turn",
-            content=[{"type": "text", "text": DEMO_MODE_REPLY}],
-            input_tokens=0,
-            output_tokens=0,
-            model=settings.llm_model,
-        )
-    ]
-
-
 @lru_cache(maxsize=1)
 def _anthropic_client() -> AnthropicClient:
     """Built once and reused: every instance opens its own HTTP connection pool."""
@@ -87,7 +74,7 @@ def _anthropic_client() -> AnthropicClient:
 
 def get_llm() -> LLMClient:
     if settings.demo_mode:
-        return ScriptedClient(demo_script())
+        return DemoClient(model=settings.llm_model)
     return _anthropic_client()
 
 
