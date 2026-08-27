@@ -1,20 +1,18 @@
 """PRESENTATION — the only place the Spanish text a human reads gets built.
 
-Imports only app.domain, never policy: rendering stays independent of decisions.
+Imports domain and the pure vocabulary/message tables, never policy: rendering stays
+independent of decisions.
 """
 
-_DENIAL_TEXTS: dict[str, str] = {
-    "unknown_tool": "La operación solicitada no existe.",
-    "role_lacks_permission": "Tu rol no tiene permiso para esta operación.",
-    "invalid_arguments": "Los datos de la operación no son válidos.",
-    "order_not_found": "No encontré esa orden.",
-    "invalid_status_transition": "Ese cambio de estado no está permitido.",
-}
+from app.application.messages import DENIAL_TEXTS
+from app.application.permissions import DenialReason
+from app.domain.actions import OrderStatusChange
+from app.domain.constants import STATUS_LABELS_ES
 
 
 def render_denial(reason: str) -> str:
     """Human-readable Spanish message for a PolicyDecision denial reason code."""
-    return _DENIAL_TEXTS[reason]
+    return DENIAL_TEXTS[DenialReason(reason)]
 
 
 def denial_texts() -> dict[str, str]:
@@ -22,4 +20,11 @@ def denial_texts() -> dict[str, str]:
 
     Exists so a test can assert this matches policy.DenialReason without an import.
     """
-    return dict(_DENIAL_TEXTS)
+    return {reason.value: text for reason, text in DENIAL_TEXTS.items()}
+
+
+def render_summary(change: OrderStatusChange) -> str:
+    """Consent sentence a supervisor approves before the write it describes executes."""
+    old = STATUS_LABELS_ES[change.from_status]
+    new = STATUS_LABELS_ES[change.to_status]
+    return f'Cambiar la orden #{change.order_id} de "{old}" a "{new}". ' f"Motivo: {change.reason}"
