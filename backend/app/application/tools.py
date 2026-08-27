@@ -12,21 +12,17 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.application.permissions import ToolName
-from app.domain.constants import (
-    ALLOWED_TRANSITIONS,
-    DEFAULT_ORDER_LIMIT,
-    MAX_ORDER_LIMIT,
-    OrderStatus,
-)
+from app.domain.constants import ALLOWED_TRANSITIONS, DEFAULT_ORDER_LIMIT, OrderStatus
 from app.domain.context import AuditContext
 from app.domain.errors import ClientNotFoundError, InvalidTransitionError, OrderNotFoundError
 from app.domain.models import AuditLog, Client, Order, Payment
 
-_ZERO = Decimal("0.00")
+# The scale every balance is quantized to, and what an empty sum coalesces to. Not ZERO_COST.
+ZERO_MONEY = Decimal("0.00")
 
 
 def _money(value: Decimal | None) -> str:
-    return str((value or _ZERO).quantize(_ZERO))
+    return str((value or ZERO_MONEY).quantize(ZERO_MONEY))
 
 
 def get_sales_orders(
@@ -54,7 +50,7 @@ def get_sales_orders(
         query = query.where(Order.client_id == client_id)
 
     query = query.order_by(Order.created_at.desc(), Order.id.desc())
-    query = query.limit(min(limit, MAX_ORDER_LIMIT))
+    query = query.limit(limit)
 
     orders = db.execute(query).scalars().all()
     return {
@@ -80,14 +76,16 @@ def get_client_balance(db: Session, client_id: int) -> dict[str, Any]:
         raise ClientNotFoundError(f"client {client_id} does not exist")
 
     total_ordered = db.execute(
-        select(func.coalesce(func.sum(Order.total), _ZERO)).where(
+        select(func.coalesce(func.sum(Order.total), ZERO_MONEY)).where(
             Order.client_id == client_id,
             Order.status != OrderStatus.CANCELLED.value,
         )
     ).scalar_one()
 
     total_paid = db.execute(
-        select(func.coalesce(func.sum(Payment.amount), _ZERO)).where(Payment.client_id == client_id)
+        select(func.coalesce(func.sum(Payment.amount), ZERO_MONEY)).where(
+            Payment.client_id == client_id
+        )
     ).scalar_one()
 
     balance = total_ordered - total_paid

@@ -102,8 +102,29 @@ def test_results_are_ordered_by_id_desc_within_the_same_date(db, sample):
     assert ids == sorted(ids, reverse=True)
 
 
-def test_limit_is_capped_defensively(db, sample):
-    assert len(tools.get_sales_orders(db, limit=500)["orders"]) <= MAX_ORDER_LIMIT
+def test_limit_runs_verbatim_because_the_clamp_lives_only_in_the_schema(db, sample):
+    """A second clamp here would let an audited limit differ from the executed one.
+
+    Seeds one row more than it asks for, so the count also proves the limit is applied.
+    """
+    requested = MAX_ORDER_LIMIT + 5
+    client_id = sample["other_id"]
+    db.add_all(
+        [
+            Order(
+                client_id=client_id,
+                status=OrderStatus.PENDING,
+                total=Decimal("1.00"),
+                created_at=date(2026, 7, 2),
+            )
+            for _ in range(requested)
+        ]
+    )
+    db.flush()
+
+    result = tools.get_sales_orders(db, client_id=client_id, limit=requested)
+    assert result["count"] == requested
+    assert result["count"] > MAX_ORDER_LIMIT
 
 
 def test_balance_excludes_cancelled_orders(db, sample):
