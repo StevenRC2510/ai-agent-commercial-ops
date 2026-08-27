@@ -10,9 +10,7 @@ from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.application.constants import Model
-
-# Ordered from least to most severe, so error messages list them the way a human would.
-VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+from app.infrastructure.obs_constants import VALID_LOG_LEVELS
 
 
 def _require_url_with_database(value: str) -> str:

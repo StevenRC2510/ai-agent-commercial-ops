@@ -24,5 +24,8 @@ PRICES: Mapping[Model, tuple[Decimal, Decimal]] = {
 # PRICES is quoted per million tokens, so every estimate divides by this.
 TOKENS_PER_PRICE_UNIT = Decimal(1_000_000)
 
+# A turn that has not called the model yet has spent this. Not the money scale of a balance.
+ZERO_COST = Decimal("0.00")
+
 # Identifiers the model never needs to answer, stripped from every tool result (SPEC-2 §6.1).
 PERSONAL_FIELDS: frozenset[str] = frozenset({"email"})

@@ -2,6 +2,9 @@
 
 LOGGER_NAME = "app"
 
+# Ordered from least to most severe, so error messages list them the way a human would.
+VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
 RESERVED_LOG_RECORD_FIELDS = frozenset(
     {
         "args",

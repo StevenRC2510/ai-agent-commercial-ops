@@ -24,6 +24,7 @@ from evals.preflight import EvalBlockedError
 from evals.recording import RecordingClient
 from evals.scoring import CaseRun, Observation, score
 
+# Every audit row a case produces carries this actor, so eval traffic is never read as a user's.
 EVAL_ACTOR = "eval-runner"
 
 

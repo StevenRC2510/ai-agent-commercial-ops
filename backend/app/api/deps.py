@@ -13,7 +13,7 @@ from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.application.messages import UNAUTHENTICATED
-from app.application.permissions import Role
+from app.application.permissions import ROLE_VALUES
 from app.application.ports import LLMClient, PendingActionStore
 from app.config import settings
 from app.domain.context import AuditContext
@@ -22,8 +22,6 @@ from app.infrastructure.llm.anthropic import AnthropicClient
 from app.infrastructure.llm.demo import DemoClient
 from app.infrastructure.pending.memory import InMemoryPendingActionStore
 from app.infrastructure.session.memory import ConversationStore
-
-_KNOWN_ROLES = frozenset(role.value for role in Role)
 
 _pending_store = InMemoryPendingActionStore(
     ttl_seconds=settings.pending_action_ttl_seconds,
@@ -55,7 +53,7 @@ def get_context(
     x_user_role: Annotated[str | None, Header()] = None,
 ) -> AuditContext:
     """Identity off the wire, refused without ever naming the roles it would accept."""
-    if not x_user_id or x_user_role not in _KNOWN_ROLES:
+    if not x_user_id or x_user_role not in ROLE_VALUES:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=UNAUTHENTICATED)
     return AuditContext(actor=x_user_id, role=x_user_role, trace_id=request.state.trace_id)
 

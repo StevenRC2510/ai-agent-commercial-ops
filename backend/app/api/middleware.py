@@ -6,6 +6,7 @@ from starlette.responses import Response
 
 from app.infrastructure import obs
 
+# Header name the HTTP surface writes. Shared with the CORS setup in app/main.py.
 TRACE_HEADER = "X-Trace-Id"
 
 

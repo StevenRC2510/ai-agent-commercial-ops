@@ -12,6 +12,10 @@ class Role(str, Enum):
     SUPERVISOR = "supervisor"
 
 
+# Derived, never restated: a hand-written copy of the roles would drift from the enum above.
+ROLE_VALUES: frozenset[str] = frozenset(role.value for role in Role)
+
+
 class ToolName(str, Enum):
     GET_SALES_ORDERS = "get_sales_orders"
     GET_CLIENT_BALANCE = "get_client_balance"
