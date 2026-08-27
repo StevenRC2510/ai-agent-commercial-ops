@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 from app.api.deps import get_llm
+from app.application.message_contract import enforce_message_contract
 from app.application.messages import FALLBACK_BUDGET_EXCEEDED, FALLBACK_MAX_ITERATIONS
 from app.config import settings
 from app.domain.constants import OrderStatus
@@ -104,6 +105,42 @@ def test_the_conversation_history_survives_between_turns(client, seeded, session
         "user",
         "assistant",
     ]
+
+
+def test_a_confirmation_turn_leaves_a_history_the_messages_api_would_accept(
+    client, db, seeded, sessions
+):
+    """The card path used to persist a tool_use nothing ever answered."""
+    order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
+    app.dependency_overrides[get_llm] = lambda: ScriptedClient(
+        [write_proposal(order.id, OrderStatus.DELIVERED)]
+    )
+    card = client.post(
+        "/chat", json={"message": "cambia la orden", "session_id": "s-1"}, headers=_supervisor()
+    )
+    assert card.json()["type"] == "confirmation_required"
+    enforce_message_contract(sessions.get_or_create("s-1").history)
+
+
+def test_the_turn_after_a_confirmation_card_is_still_a_valid_conversation(
+    client, db, seeded, sessions
+):
+    """Every session that showed a card was poisoned from that point on."""
+    order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
+    app.dependency_overrides[get_llm] = lambda: ScriptedClient(
+        [write_proposal(order.id, OrderStatus.DELIVERED)]
+    )
+    client.post(
+        "/chat", json={"message": "cambia la orden", "session_id": "s-1"}, headers=_supervisor()
+    )
+
+    app.dependency_overrides[get_llm] = lambda: ScriptedClient([text_response("de nada")])
+    follow_up = client.post(
+        "/chat", json={"message": "gracias", "session_id": "s-1"}, headers=_supervisor()
+    )
+
+    assert follow_up.json()["text"] == "de nada"
+    enforce_message_contract(sessions.get_or_create("s-1").history)
 
 
 def test_a_turn_that_costs_money_accumulates_it_on_the_session(client, seeded, sessions):

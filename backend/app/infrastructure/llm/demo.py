@@ -8,6 +8,7 @@ about. Same contract as the real client, so every proposal still goes through th
 import json
 import unicodedata
 from typing import Any
+from uuid import uuid4
 
 from app.application.constants import Model
 from app.application.permissions import ToolName
@@ -34,7 +35,7 @@ from app.infrastructure.llm.demo_constants import (
     STEM_EXCLUSIONS,
     TOOL_ERROR_ANSWER,
     TOOL_STEMS,
-    TOOL_USE_ID,
+    TOOL_USE_ID_PREFIX,
     UNTRUSTED_PATTERN,
     WORD_PATTERN,
     WRITE_REASON,
@@ -42,6 +43,10 @@ from app.infrastructure.llm.demo_constants import (
 )
 
 Message = dict[str, Any]
+
+
+def _tool_use_id() -> str:
+    return f"{TOOL_USE_ID_PREFIX}-{uuid4().hex[:8]}"
 
 
 def _normalise(text: str) -> str:
@@ -343,7 +348,7 @@ class DemoClient:
         return self._response("end_turn", [{"type": "text", "text": text}])
 
     def _tool_use(self, tool: ToolName, arguments: dict[str, Any]) -> LLMResponse:
-        block = {"type": "tool_use", "id": TOOL_USE_ID, "name": tool.value, "input": arguments}
+        block = {"type": "tool_use", "id": _tool_use_id(), "name": tool.value, "input": arguments}
         return self._response("tool_use", [block])
 
     def _response(self, stop_reason: str, content: list[dict[str, Any]]) -> LLMResponse:

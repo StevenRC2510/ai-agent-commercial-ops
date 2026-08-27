@@ -156,7 +156,8 @@ LOOP_GUARD_REPLY = "Ya consulté lo que podía para esta petición."
 
 WRITE_REASON = "Solicitado por el usuario en modo demostración."
 
-TOOL_USE_ID = "demo-tool-use"
+# A prefix, not the id: one id shared by every proposal makes an orphan look answered.
+TOOL_USE_ID_PREFIX = "demo-tool-use"
 
 UNTRUSTED_PATTERN = re.compile(r"<untrusted_data>\s*(?P<payload>.*?)\s*</untrusted_data>", re.S)
 DATE_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")

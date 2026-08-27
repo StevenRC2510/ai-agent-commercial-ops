@@ -17,6 +17,7 @@ from app.application import policy, presentation, tools
 from app.application.agent.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 from app.application.agent.tool_schemas import tool_schemas_for
 from app.application.constants import PERSONAL_FIELDS, ZERO_COST
+from app.application.message_contract import message_contract_violations
 from app.application.messages import (
     FALLBACK_BUDGET_EXCEEDED,
     FALLBACK_INPUT_TOO_LONG,
@@ -161,6 +162,32 @@ def _confirmation_result(
     )
 
 
+def _commit(
+    conversation: list[dict[str, Any]],
+    exchange: list[dict[str, Any]],
+    reply_text: str,
+    *,
+    trace_id: str,
+    log: LogFn,
+) -> None:
+    """The single place a turn reaches the stored history, so no exit can half-write it.
+
+    An exchange still ending on the user is completed with the reply the user was shown:
+    dropping it instead would lose the antecedent a follow-up question refers back to.
+    """
+    if not exchange:
+        return
+    completed = exchange
+    if exchange[-1]["role"] == "user":
+        reply = {"role": "assistant", "content": [{"type": "text", "text": reply_text}]}
+        completed = [*exchange, reply]
+    violations = message_contract_violations([*conversation, *completed])
+    if violations:
+        log(trace_id, "exchange_discarded", violations="; ".join(violations))
+        return
+    conversation.extend(completed)
+
+
 def run_turn(
     *,
     user_message: str,
@@ -175,11 +202,50 @@ def run_turn(
     history: list[dict[str, Any]] | None = None,
     already_spent: Decimal = ZERO_COST,
 ) -> TurnResult:
-    """Runs one conversational turn: proposes tool calls, submits each to the policy.
+    """Runs one conversational turn; `history` gains it only as a completed exchange.
 
-    `pending_store` and `log` are required: a missing pending store means `/confirm`
-    can never find what `/chat` proposed, and a missing logger means the audit
-    trail silently stops existing. Neither failure should be possible to forget.
+    `pending_store` and `log` are required: without them `/confirm` cannot find what
+    `/chat` proposed, and the audit trail silently stops existing.
+    """
+    conversation = history if history is not None else []
+    exchange: list[dict[str, Any]] = []
+    result = _run_exchange(
+        user_message=user_message,
+        role=role,
+        actor=actor,
+        session_id=session_id,
+        db=db,
+        llm=llm,
+        trace_id=trace_id,
+        pending_store=pending_store,
+        log=log,
+        conversation=conversation,
+        exchange=exchange,
+        already_spent=already_spent,
+    )
+    _commit(conversation, exchange, result.text, trace_id=trace_id, log=log)
+    return result
+
+
+def _run_exchange(
+    *,
+    user_message: str,
+    role: str,
+    actor: str,
+    session_id: str,
+    db: Session,
+    llm: LLMClient,
+    trace_id: str,
+    pending_store: PendingActionStore,
+    log: LogFn,
+    conversation: list[dict[str, Any]],
+    exchange: list[dict[str, Any]],
+    already_spent: Decimal,
+) -> TurnResult:
+    """Proposes tool calls and submits each to the policy, writing only into `exchange`.
+
+    It never touches `conversation`, so every exit — including one added later — leaves
+    the stored history untouched until `_commit` accepts the turn as a whole.
     """
     # What this turn spends, separate from what the session already spent. Never a default.
     turn_cost = ZERO_COST
@@ -207,8 +273,7 @@ def run_turn(
 
     log(trace_id, "user_message", chars=len(user_message), sha8=_sha8(user_message))
 
-    messages = history if history is not None else []
-    messages.append({"role": "user", "content": user_message})
+    exchange.append({"role": "user", "content": user_message})
 
     system_prompt = SYSTEM_PROMPT.format(role=role, today=date.today().isoformat())
     declared_tools = tool_schemas_for(role)
@@ -218,7 +283,7 @@ def run_turn(
         try:
             response = llm.create(
                 system=system_prompt,
-                messages=trim_history(messages, settings.history_max_turns),
+                messages=trim_history([*conversation, *exchange], settings.history_max_turns),
                 tools=declared_tools,
             )
         except Exception as exc:
@@ -257,11 +322,10 @@ def run_turn(
                 telemetry=counters.snapshot(),
             )
 
-        messages.append({"role": "assistant", "content": response.content})
-
         telemetry = counters.snapshot()
 
         if response.stop_reason != "tool_use":
+            exchange.append({"role": "assistant", "content": response.content})
             return TurnResult(
                 type="message",
                 text=_extract_text(response.content),
@@ -314,7 +378,7 @@ def run_turn(
             standing_denials.pop(tool_name, None)
 
             if decision.requires_confirmation:
-                return _confirmation_result(
+                card = _confirmation_result(
                     decision,
                     session_id=session_id,
                     actor=actor,
@@ -326,6 +390,11 @@ def run_turn(
                     cost_usd=turn_cost,
                     telemetry=telemetry,
                 )
+                # The card replaces the proposal: an unresolved tool_use poisons every later turn.
+                exchange.append(
+                    {"role": "assistant", "content": [{"type": "text", "text": card.text}]}
+                )
+                return card
 
             exec_started = time.monotonic()
             try:
@@ -342,7 +411,8 @@ def run_turn(
                 {"type": "tool_result", "tool_use_id": tool_use_id, "content": wrapped}
             )
 
-        messages.append({"role": "user", "content": tool_results})
+        exchange.append({"role": "assistant", "content": response.content})
+        exchange.append({"role": "user", "content": tool_results})
 
     log(trace_id, "max_iterations_reached")
     return TurnResult(

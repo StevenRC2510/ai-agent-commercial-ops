@@ -15,9 +15,11 @@ from app.application.agent.orchestrator import (
     wrap_untrusted,
 )
 from app.application.constants import Model
+from app.application.message_contract import enforce_message_contract
 from app.application.messages import (
     FALLBACK_BUDGET_EXCEEDED,
     FALLBACK_INPUT_TOO_LONG,
+    FALLBACK_LLM_ERROR,
     FALLBACK_MAX_ITERATIONS,
 )
 from app.application.permissions import DenialReason, Role, ToolName
@@ -816,3 +818,169 @@ def test_cost_usd_has_no_default_a_missing_value_must_fail_construction() -> Non
     """A zero default is exactly how under-billing would come back unnoticed."""
     with pytest.raises(TypeError):
         TurnResult(type="message", text="x", trace_id="abc12345")
+
+
+def _turn_in_session(db, history: list[dict[str, Any]], llm: ScriptedClient, **extra: Any):
+    """One turn of a live session: `history` is the list the caller keeps between turns."""
+    return _run(
+        user_message=extra.pop("user_message", "dame las órdenes"),
+        role=extra.pop("role", Role.OPERATOR.value),
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+        history=history,
+        **extra,
+    )
+
+
+def _expensive_response() -> LLMResponse:
+    """300_000 output tokens on claude-haiku-4-5 ($5/M) is $1.50, past the $1 session cap."""
+    return LLMResponse(
+        stop_reason="tool_use",
+        content=[_tool_use(ToolName.GET_SALES_ORDERS, {})],
+        input_tokens=0,
+        output_tokens=300_000,
+        model="claude-haiku-4-5",
+    )
+
+
+def _exit_input_too_long(db, history):
+    return _turn_in_session(db, history, ScriptedClient([]), user_message="x" * 2001)
+
+
+def _exit_preflight_budget(db, history):
+    return _turn_in_session(db, history, ScriptedClient([]), already_spent=Decimal("999.00"))
+
+
+def _exit_llm_error(db, history):
+    return _turn_in_session(db, history, ScriptedClient([TimeoutError("simulated")]))
+
+
+def _exit_midturn_budget(db, history):
+    return _turn_in_session(db, history, ScriptedClient([_expensive_response()]))
+
+
+def _exit_final_message(db, history):
+    return _turn_in_session(db, history, ScriptedClient([_text_response("Hay 5 órdenes.")]))
+
+
+def _exit_confirmation(db, history):
+    order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
+    proposal = _response_with(_tool_use(ToolName.UPDATE_ORDER_STATUS, _write_args(order.id)))
+    return _turn_in_session(db, history, ScriptedClient([proposal]), role=Role.SUPERVISOR.value)
+
+
+def _exit_max_iterations(db, history):
+    responses = [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})) for _ in range(6)]
+    return _turn_in_session(db, history, ScriptedClient(responses))
+
+
+# Every way run_turn can return. A new exit belongs here, or it is untested by construction.
+RUN_TURN_EXITS = [
+    _exit_input_too_long,
+    _exit_preflight_budget,
+    _exit_llm_error,
+    _exit_midturn_budget,
+    _exit_final_message,
+    _exit_confirmation,
+    _exit_max_iterations,
+]
+
+
+@pytest.mark.parametrize("drive_exit", RUN_TURN_EXITS, ids=lambda exit_fn: exit_fn.__name__)
+def test_every_exit_leaves_a_history_the_next_user_message_can_be_appended_to(
+    drive_exit, db, seeded
+):
+    """A trailing user message is valid on its own; it only breaks when the next turn lands."""
+    history: list[dict[str, Any]] = []
+    drive_exit(db, history)
+    enforce_message_contract([*history, {"role": "user", "content": "y también la 43"}])
+
+
+@pytest.mark.parametrize("drive_exit", RUN_TURN_EXITS, ids=lambda exit_fn: exit_fn.__name__)
+def test_the_turn_after_any_exit_still_answers_in_the_same_session(drive_exit, db, seeded):
+    """The half-exchange only hurts on the next turn, which is where the user meets it."""
+    history: list[dict[str, Any]] = []
+    drive_exit(db, history)
+    follow_up = _turn_in_session(
+        db,
+        history,
+        ScriptedClient([_text_response("La 43 sigue pendiente.")]),
+        user_message="y también la 43",
+    )
+    assert follow_up.type == "message"
+    enforce_message_contract(history)
+
+
+def test_a_model_outage_does_not_break_every_later_turn_of_the_session(db, seeded):
+    """The lived sequence: the model fails, the user writes again, and that turn must work."""
+    history: list[dict[str, Any]] = []
+    failed = _turn_in_session(
+        db,
+        history,
+        ScriptedClient([TimeoutError("simulated")]),
+        user_message="dame la factura 42",
+    )
+    assert failed.type == "error"
+
+    retry = _turn_in_session(
+        db,
+        history,
+        ScriptedClient([_text_response("La 43 sigue pendiente.")]),
+        user_message="y también la 43",
+    )
+    assert retry.type == "message"
+    assert retry.text == "La 43 sigue pendiente."
+    assert [message["role"] for message in history] == ["user", "assistant", "user", "assistant"]
+
+
+def test_a_failed_turn_keeps_the_user_message_a_follow_up_refers_back_to(db, seeded):
+    """ "y también la 43" only makes sense to the model if "la factura 42" is still there."""
+    history: list[dict[str, Any]] = []
+    _turn_in_session(
+        db,
+        history,
+        ScriptedClient([TimeoutError("simulated")]),
+        user_message="dame la factura 42",
+    )
+    llm = ScriptedClient([_text_response("Aquí van las dos.")])
+    _turn_in_session(db, history, llm, user_message="y también la 43")
+    assert "la factura 42" in str(llm.calls[0].messages)
+
+
+def test_the_history_records_the_fallback_the_user_was_actually_shown(db, seeded):
+    """The model must read the turn as failed, not as an answer it never gave."""
+    history: list[dict[str, Any]] = []
+    _turn_in_session(db, history, ScriptedClient([TimeoutError("simulated")]))
+    assert history[-1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": FALLBACK_LLM_ERROR}],
+    }
+
+
+def _orphan_tool_use() -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "tu-9", "name": "get_sales_orders", "input": {}}],
+    }
+
+
+def test_an_already_invalid_history_is_not_extended_with_a_further_exchange(db, seeded):
+    """Appending to a conversation the API already rejects only buries the evidence."""
+    broken = [{"role": "user", "content": "hola"}, _orphan_tool_use()]
+    history = list(broken)
+    _turn_in_session(db, history, ScriptedClient([_text_response("hola")]))
+    assert history == broken
+
+
+def test_an_exchange_dropped_for_a_contract_violation_is_logged_not_swallowed(db, seeded):
+    events: list[str] = []
+
+    def capture(trace_id: str, event: str, **fields: Any) -> None:
+        events.append(event)
+
+    history = [{"role": "user", "content": "hola"}, _orphan_tool_use()]
+    _turn_in_session(db, history, ScriptedClient([_text_response("hola")]), log=capture)
+    assert "exchange_discarded" in events

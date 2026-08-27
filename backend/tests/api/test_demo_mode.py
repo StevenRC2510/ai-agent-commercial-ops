@@ -9,6 +9,7 @@ import re
 import pytest
 
 from app.api.deps import get_llm
+from app.application.message_contract import enforce_message_contract
 from app.config import settings
 from app.domain.constants import ALLOWED_TRANSITIONS, OrderStatus
 from app.domain.models import AuditLog, Client, Order
@@ -142,6 +143,40 @@ def test_an_unrecognised_message_answers_without_calling_a_tool(demo, seeded):
     body = response.json()
     assert body["text"] == CAPABILITIES_REPLY
     assert body["telemetry"]["iterations"] == 1
+
+
+def test_a_session_that_showed_a_card_and_kept_talking_stays_a_valid_conversation(
+    demo, db, seeded, sessions
+):
+    """DemoClient ignores message shape, so only the persisted history can prove this."""
+    order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
+    demo.post(
+        "/chat",
+        json={"message": f"marca la orden #{order.id} como entregada", "session_id": "s-demo-mix"},
+        headers=_supervisor(),
+    )
+    demo.post(
+        "/chat",
+        json={"message": "¿cuántas órdenes pendientes hay?", "session_id": "s-demo-mix"},
+        headers=_supervisor(),
+    )
+
+    enforce_message_contract(sessions.get_or_create("s-demo-mix").history)
+
+
+def test_a_session_longer_than_the_trim_window_stays_a_valid_conversation(demo, seeded, sessions):
+    """Every turn calls a tool, so the trimmed turns are the ones that used to orphan ids."""
+    for _ in range(settings.history_max_turns + 3):
+        demo.post(
+            "/chat",
+            json={"message": "dame las ordenes pendientes", "session_id": "s-demo-long"},
+            headers=_operator(),
+        )
+
+    history = sessions.get_or_create("s-demo-long").history
+    # Without this the contract check below would pass on an untrimmed conversation.
+    assert "tool_use" not in str(history[:2])
+    enforce_message_contract(history)
 
 
 def _candidate_ids(text):
