@@ -3,6 +3,7 @@ validators enforce what plain `str` typing cannot, shared with env_check.py.
 """
 
 from datetime import date
+from decimal import Decimal
 from urllib.parse import urlparse
 
 from pydantic import field_validator
@@ -37,6 +38,19 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     seed_anchor_date: str = ""
     frontend_origin: str = "http://localhost:5173"
+
+    # anthropic_api_key is the project's only real secret: no default beyond empty string.
+    anthropic_api_key: str = ""
+    llm_model: str = "claude-haiku-4-5"
+    llm_temperature: float = 0.0
+    llm_timeout_seconds: int = 30
+    llm_max_iterations: int = 5
+    llm_max_tokens: int = 1024
+    max_cost_per_session_usd: Decimal = Decimal("1.00")
+    demo_mode: bool = False
+    max_message_chars: int = 2000
+    pending_action_ttl_seconds: int = 300
+    history_max_turns: int = 6
 
     @field_validator("database_url")
     @classmethod
