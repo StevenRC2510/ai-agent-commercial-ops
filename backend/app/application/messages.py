@@ -32,3 +32,16 @@ FALLBACK_INPUT_TOO_LONG = (
 FALLBACK_BUDGET_EXCEEDED = (
     "Esta conversación alcanzó su límite de costo. Empieza una nueva para continuar."
 )
+FALLBACK_INTERNAL_ERROR = (
+    "Ocurrió un error inesperado y no pude completar la operación. Vuelve a intentarlo."
+)
+
+# HTTP surface. UNAUTHENTICATED names no role: an unauthenticated caller learns nothing.
+UNAUTHENTICATED = "No pude identificar tu sesión. Vuelve a iniciarla."
+CONSENT_UNAVAILABLE = "Esta confirmación ya no es válida. Vuelve a pedir el cambio."
+CONFIRMATION_EXECUTED = "Cambio aplicado. {summary}"
+CONFIRMATION_CANCELLED = "Cancelado. No se aplicó ningún cambio."
+DEMO_MODE_REPLY = (
+    "Estoy en modo demostración y no hay un modelo real respondiendo. "
+    "Configura ANTHROPIC_API_KEY y desactiva DEMO_MODE para conversar de verdad."
+)
