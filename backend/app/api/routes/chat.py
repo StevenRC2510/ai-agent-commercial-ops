@@ -22,7 +22,7 @@ def chat(
     pending_store: PendingStore,
     sessions: Sessions,
 ) -> TurnResponse:
-    """Load the conversation, run the turn, save what it appended."""
+    """Load the live conversation, run the turn, record what it appended and what it cost."""
     session = sessions.get_or_create(payload.session_id)
     history = trim_history(session.history, sessions.history_max_turns)
     result = run_turn(
@@ -42,7 +42,6 @@ def chat(
     session.history = history
     # Billed on every turn, whatever its type: a confirmation burns tokens like any other.
     session.add_cost(result.cost_usd)
-    sessions.save(session)
     fields = asdict(result)
     # Spend is server-side accounting, not part of the published response shape.
     fields.pop("cost_usd")

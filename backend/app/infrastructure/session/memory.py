@@ -13,9 +13,7 @@ class ConversationStore:
         self._sessions: dict[str, ConversationSession] = {}
 
     def get_or_create(self, session_id: str) -> ConversationSession:
+        """Returns the live session, so a caller's mutations are already stored."""
         if session_id not in self._sessions:
             self._sessions[session_id] = ConversationSession(session_id=session_id)
         return self._sessions[session_id]
-
-    def save(self, session: ConversationSession) -> None:
-        self._sessions[session.session_id] = session
