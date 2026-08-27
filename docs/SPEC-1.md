@@ -307,17 +307,26 @@ Transversal:
 
 El núcleo del ejercicio. Determinista, sin IA, con cobertura alta.
 
+`ROLE_PERMISSIONS` y `REQUIRES_CONFIRMATION` viven en su propio módulo, **`application/permissions.py`** — la tabla de autorización completa, aislada a propósito:
+
 ```python
-ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
+# application/permissions.py — importa únicamente `types`, nada más.
+from types import MappingProxyType
+
+ROLE_PERMISSIONS: MappingProxyType[str, frozenset[str]] = MappingProxyType({
     "operator":   frozenset({"get_sales_orders", "get_client_balance"}),
     "supervisor": frozenset({"get_sales_orders", "get_client_balance",
                              "update_order_status"}),
-}
+})
 
 REQUIRES_CONFIRMATION: frozenset[str] = frozenset({"update_order_status"})
 ```
 
-Schemas de argumentos con Pydantic v2, uno por tool. **Estrictos:**
+La propiedad que importa no es "cero imports", es "nada puede influir en la tabla": `types` es un constructor de tipos puro, sin configuración, sin I/O y sin estado propio, así que importarlo no crea ninguna dependencia real. `tests/architecture/test_imports.py::test_permissions_module_is_pure_data` parsea el archivo con `ast` y falla si aparece cualquier import fuera de `{"types"}` — probado en ambas direcciones: falla con `import os`, falla también con `import json`, confirmando que el conjunto permitido es exactamente ese, no "cualquier cosa de la librería estándar". Aparte de esa dependencia, `ROLE_PERMISSIONS` es inmutable en tiempo de ejecución porque está envuelto en `MappingProxyType` — asignar una clave (`ROLE_PERMISSIONS["operator"] = ...`) lanza `TypeError`, y una prueba dedicada lo verifica. Los valores `frozenset` cierran la misma brecha un nivel más abajo, para el conjunto de tools de cada rol, pero por sí solos no protegen el mapa exterior: una versión anterior de este módulo confiaba solo en ellos y en la prueba de pureza, y quedaba posible reescribir `ROLE_PERMISSIONS["operator"]` para conceder permisos de escritura en una línea. `MappingProxyType` y la prueba de importaciones cubren propiedades distintas y ninguna sustituye a la otra: una dice que nada de afuera puede alcanzar la tabla, la otra dice que nada de adentro puede reescribirla.
+
+`policy.py` importa ambos nombres desde `.permissions` y sigue siendo el único lugar donde se consultan: un auditor que pregunta "¿qué puede hacer un operador?" encuentra la tabla en el mismo módulo que la función que la usa (`evaluate()`), no dispersa por el proyecto.
+
+Schemas de argumentos con Pydantic v2, uno por tool, **en `application/tool_args.py`** — no en `policy.py`: cambian por una razón distinta (la forma de una tool) a la de las reglas de autorización, así que viven en su propio módulo.
 
 ```python
 class GetSalesOrdersArgs(BaseModel):
@@ -325,47 +334,76 @@ class GetSalesOrdersArgs(BaseModel):
     status: OrderStatus | None = None
     date_from: date | None = None
     date_to: date | None = None
-    client_id: int | None = Field(default=None, gt=0)
-    limit: int = Field(default=50, gt=0)
+    client_id: int | None = Field(default=None, gt=0, strict=True)
+    limit: int = Field(default=50, gt=0, strict=True)
 
-    @field_validator("limit")
-    @classmethod
-    def clamp_limit(cls, v: int) -> int:
-        """Normalizes here, not in tools.py, so safe_args is what actually runs."""
-        return min(v, 200)
+    @model_validator(mode="after")
+    def normalise(self) -> "GetSalesOrdersArgs":
+        """Clamps limit here, not in tools.py, so safe_args is what actually runs."""
+        if self.limit > MAX_ORDER_LIMIT:
+            self.limit = MAX_ORDER_LIMIT
+        return self
 
 
 class UpdateOrderStatusArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    order_id: int = Field(gt=0)
+    order_id: int = Field(gt=0, strict=True)
     new_status: OrderStatus
     reason: str = Field(min_length=3, max_length=280)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_is_not_blank(cls, value: str) -> str:
+        """Rejects a reason that is only whitespace despite meeting min_length."""
+        ...
+```
+
+`strict=True` vive en cada campo entero (`order_id`, `client_id`, `limit`), nunca a nivel de modelo: strict a nivel de modelo también exige una instancia real de `OrderStatus` para `new_status`, y una llamada de tool siempre llega con el status como string — eso volvía la única tool de escritura imposible de invocar. Strict por campo bloquea `bool` (subclase de `int`) y strings numéricos en los enteros, sin tocar la coerción del enum.
+
+`OrderStatusChange` — qué cambiaría una escritura — vive en `domain/actions.py`, no aquí, precisamente para que `presentation.py` no tenga que importar nada de `policy.py`:
+
+```python
+# domain/actions.py
+@dataclass(frozen=True)
+class OrderStatusChange:
+    """What a write would change. Rendered into prose by the presentation layer."""
+    order_id: int
+    from_status: OrderStatus
+    to_status: OrderStatus
+    reason: str
 ```
 
 ```python
-@dataclass(frozen=True)
-class ActionDescriptor:
-    """Structure only — no Spanish text. presentation.py turns this into
-    the sentence the user consents to."""
-    tool_name: str
-    safe_args: dict
+class DenialReason(str, Enum):
+    """The closed set of reasons evaluate() may deny a call."""
+    UNKNOWN_TOOL = "unknown_tool"
+    ROLE_LACKS_PERMISSION = "role_lacks_permission"
+    INVALID_ARGUMENTS = "invalid_arguments"
+    ORDER_NOT_FOUND = "order_not_found"
+    INVALID_STATUS_TRANSITION = "invalid_status_transition"
 
 
 @dataclass(frozen=True)
 class PolicyDecision:
     allowed: bool
     requires_confirmation: bool
-    reason: str          # stable code: "ok" | "unknown_tool" |
-                         # "role_lacks_permission" | "invalid_arguments" |
-                         # "order_not_found" | "invalid_status_transition"
-    detail: str = ""     # human message, safe to show to the user
-    safe_args: dict | None = None
-    action: ActionDescriptor | None = None   # populated only if requires_confirmation
+    reason: str          # "ok", or a DenialReason value — plain str on
+                         # the wire, not the enum itself
+    safe_args: MappingProxyType[str, Any] | None = None
+    change: OrderStatusChange | None = None   # populated only if requires_confirmation
+
+
+def _deny(reason: DenialReason) -> PolicyDecision:
+    return PolicyDecision(allowed=False, requires_confirmation=False, reason=reason.value)
 
 
 def evaluate(tool_name: str, raw_args: dict, role: str, db: Session) -> PolicyDecision:
     ...
 ```
+
+`PolicyDecision` no lleva texto: ni `detail` ni ningún otro campo en español. Es una decisión legible por máquina; `presentation.py` (sección 12) es quien la convierte en algo que una persona lee. `safe_args` se envuelve en `MappingProxyType`, no en un `dict` plano — de lo contrario el campo documentado como "lo que realmente se va a ejecutar" podía reescribirse después de decidido, y la garantía de `frozen=True` del dataclass sería ilusoria sobre su único campo más sensible.
+
+Cada rama de `evaluate()` que deniega llama a `_deny()` con un miembro de `DenialReason`, nunca con un string suelto: el conjunto cerrado del enum es lo que impide que una rama nueva invente un código que `presentation.py` no sepa traducir. `_deny()` es la única costura donde ese enum se convierte en el `str` plano que cruza hacia `PolicyDecision.reason` — y de ahí hacia el resto del sistema, que solo conoce el string.
 
 **Orden de evaluación, estricto y en este orden:**
 
@@ -373,7 +411,7 @@ def evaluate(tool_name: str, raw_args: dict, role: str, db: Session) -> PolicyDe
 2. El rol existe y tiene la tool asignada → si no, `role_lacks_permission`
 3. Los argumentos validan contra el schema → si no, `invalid_arguments` (aquí ya se aplica el recorte de `limit`, si corresponde)
 4. Reglas de negocio que consultan datos: la orden referenciada existe → si no, `order_not_found`; la transición pedida es legal según `ALLOWED_TRANSITIONS` → si no, `invalid_status_transition`
-5. Devuelve `allowed=True`, con `requires_confirmation` según el conjunto, `safe_args` normalizados, y `action` poblado con un `ActionDescriptor` cuando `requires_confirmation` es `True`
+5. Devuelve `allowed=True`, con `requires_confirmation` según el conjunto, `safe_args` normalizados, y `change` poblado con un `OrderStatusChange` cuando `requires_confirmation` es `True`
 
 Función auxiliar que usará la SPEC 2:
 
@@ -381,28 +419,33 @@ Función auxiliar que usará la SPEC 2:
 def visible_tools_for(role: str) -> frozenset[str]:
     """Tools that will be DECLARED to the model for this role.
     Defense in depth: shrinks the attack surface and saves tokens,
-    but evaluate() validates regardless."""
+    but evaluate() validates regardless — hiding a tool fails open if the
+    model hallucinates a name, evaluate() fails closed."""
 ```
 
-`describe_action()` ya no vive aquí: `policy.py` deja de construir texto en español — solo arma el `ActionDescriptor`. La frase la construye `presentation.py` (sección 12).
+`policy.py` nunca construye una frase en español — ni siquiera un código de motivo se traduce aquí. La traducción de cada `reason` a texto vive enteramente en `presentation.py` (sección 12), vía `render_denial()`.
 
-**Regla no negociable:** `policy.py` importa únicamente Pydantic, tipos estándar, `constants` y la sesión de SQLAlchemy — nunca `presentation`, nunca `agent`. Si crees que necesitas importar algo del agente aquí, detente y pregunta: significa que el diseño está mal (ver ADR 0004, ADR 0005).
+**Regla no negociable:** `policy.py` importa únicamente Pydantic, tipos estándar (incluido `types.MappingProxyType`), `application/permissions.py`, `application/tool_args.py` y `domain.*` (incluida la sesión de SQLAlchemy) — nunca `presentation`, nunca `agent`. Si crees que necesitas importar algo del agente aquí, detente y pregunta: significa que el diseño está mal (ver ADR 0004, ADR 0005).
 
 ## 12. Presentación (`application/presentation.py`) — capa de PRESENTACIÓN
 
-Frontera deliberada entre estructura y texto: `policy.py` nunca construye una frase, solo un `ActionDescriptor`; `presentation.py` es el único lugar del proyecto donde se arma la frase en español que el usuario va a consentir.
+Frontera deliberada entre estructura y texto: `policy.py` nunca construye una frase, solo códigos de motivo y un `OrderStatusChange`; `presentation.py` es el único lugar del proyecto donde se arma el texto en español que el usuario lee o consiente.
 
 ```python
-def render_summary(descriptor: ActionDescriptor) -> str:
+def render_denial(reason: str) -> str:
+    """Human-readable Spanish message for a PolicyDecision denial reason code."""
+
+
+def render_summary(change: OrderStatusChange) -> str:
     """Human-readable summary for the confirmation card, in Spanish.
     e.g. 'Cambiar la orden #123 de "en proceso" a "entregada". Motivo: ...'
     Uses STATUS_LABELS_ES. This exact string — and only this string — is
     what SPEC 2 persists as AuditLog.displayed_summary once /confirm exists."""
 ```
 
-En esta fase `render_summary()` se prueba de forma unitaria (cobertura exigida, sección 15), pero ningún flujo la invoca de punta a punta todavía: `update_order_status` persiste `displayed_summary=None` siempre (sección 10). La SPEC 2 la conecta cuando existe el flujo de confirmación fuera de banda (ver SPEC-2 sección 8 y ADR 0002).
+`render_denial()` existe desde esta fase (sección 15 exige cobertura total: un motivo de denegación nuevo no puede enviarse sin su mensaje). `render_summary()` llega en la SPEC 1 más adelante (Task 10 del plan de implementación); hasta entonces `update_order_status` persiste `displayed_summary=None` siempre (sección 10). La SPEC 2 conecta `render_summary()` de punta a punta cuando existe el flujo de confirmación fuera de banda (ver SPEC-2 sección 8 y ADR 0002).
 
-**Restricción:** `presentation.py` importa únicamente `constants` (para `STATUS_LABELS_ES`) y tipos estándar. No importa SQLAlchemy, no toca la base de datos, no decide nada — solo formatea lo que `policy.py` ya decidió.
+**Restricción:** `presentation.py` importa únicamente de `app.domain` (`constants` para `STATUS_LABELS_ES`, `actions` para `OrderStatusChange`) y tipos estándar — nunca de `app.application.policy`. Esa independencia es el motivo de que `OrderStatusChange` viva en `domain/` y no en `policy.py`. `presentation.py` no importa SQLAlchemy, no toca la base de datos, no decide nada — solo formatea lo que `policy.py` ya decidió.
 
 ## 13. Observabilidad (`infrastructure/obs.py`)
 

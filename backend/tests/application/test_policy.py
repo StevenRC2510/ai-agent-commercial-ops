@@ -1,0 +1,212 @@
+"""Authorization tests. Deterministic, exhaustive, and free of any model."""
+
+import pytest
+
+from app.application import policy, presentation
+from app.domain.constants import MAX_ORDER_LIMIT, OrderStatus
+
+
+def test_operator_may_read_orders(db):
+    decision = policy.evaluate("get_sales_orders", {}, "operator", db)
+    assert decision.allowed is True
+    assert decision.requires_confirmation is False
+    assert decision.reason == "ok"
+
+
+def test_operator_may_not_write(db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": 1, "new_status": "delivered", "reason": "cliente confirmo"},
+        "operator",
+        db,
+    )
+    assert decision.allowed is False
+    assert decision.reason == "role_lacks_permission"
+
+
+def test_unknown_tool_is_rejected(db):
+    decision = policy.evaluate("drop_database", {}, "supervisor", db)
+    assert decision.allowed is False
+    assert decision.reason == "unknown_tool"
+
+
+@pytest.mark.parametrize("role", ["admin", "", None, "OPERATOR", "supervisor "])
+def test_unknown_roles_are_rejected_without_revealing_which_roles_exist(role, db):
+    """Denial reasons must not work as an oracle for valid role names."""
+    decision = policy.evaluate("get_sales_orders", {}, role, db)
+    assert decision.allowed is False
+    assert decision.reason == "role_lacks_permission"
+
+
+def test_unknown_tool_is_checked_before_role(db):
+    assert policy.evaluate("drop_database", {}, "not-a-role", db).reason == "unknown_tool"
+
+
+def test_role_is_checked_before_arguments(db):
+    decision = policy.evaluate("update_order_status", {"garbage": True}, "operator", db)
+    assert decision.reason == "role_lacks_permission"
+
+
+@pytest.mark.parametrize("bad_status", ["delete_everything", "DELIVERED", "entregada"])
+def test_invalid_status_value_is_rejected(bad_status, db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": 1, "new_status": bad_status, "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+def test_sql_injection_in_order_id_is_rejected_by_the_schema(db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": "1; DROP TABLE orders", "new_status": "delivered", "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+def test_undeclared_extra_argument_is_rejected(db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": 1, "new_status": "delivered", "reason": "motivo valido", "force": True},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+@pytest.mark.parametrize("reason", ["", "ab", "x" * 5000])
+def test_reason_outside_the_allowed_length_is_rejected(reason, db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": 1, "new_status": "delivered", "reason": reason},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+@pytest.mark.parametrize("order_id", [0, -5])
+def test_non_positive_order_id_is_rejected(order_id, db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": order_id, "new_status": "delivered", "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+def test_oversized_limit_is_normalised_in_safe_args(db):
+    """safe_args must equal what will actually run, or the audit record lies."""
+    decision = policy.evaluate("get_sales_orders", {"limit": 500}, "operator", db)
+    assert decision.allowed is True
+    assert decision.safe_args["limit"] == MAX_ORDER_LIMIT
+
+
+def test_date_from_after_date_to_is_rejected(db):
+    decision = policy.evaluate(
+        "get_sales_orders",
+        {"date_from": "2026-06-30", "date_to": "2026-06-01"},
+        "operator",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+def test_visible_tools_shrink_with_the_role():
+    assert policy.visible_tools_for("operator") == frozenset(
+        {"get_sales_orders", "get_client_balance"}
+    )
+    assert "update_order_status" in policy.visible_tools_for("supervisor")
+    assert policy.visible_tools_for("admin") == frozenset()
+
+
+def test_read_tools_never_require_confirmation(db):
+    for tool in ("get_sales_orders", "get_client_balance"):
+        args = {"client_id": 1} if tool == "get_client_balance" else {}
+        assert policy.evaluate(tool, args, "operator", db).requires_confirmation is False
+
+
+def test_every_denial_reason_has_a_message():
+    """Type-level bridge: mypy stops a reason not in the enum, this stops an enum member with
+    no message. Task 9 cannot add a denial code without both."""
+    assert {r.value for r in policy.DenialReason} == set(presentation.denial_texts())
+
+
+@pytest.mark.parametrize("reason", [r.value for r in policy.DenialReason])
+def test_render_denial_returns_text_for_every_denial_reason(reason):
+    assert presentation.render_denial(reason)
+
+
+def test_operator_may_read_client_balance(db):
+    """Happy-path read for the second read tool, not just its confirmation flag."""
+    decision = policy.evaluate("get_client_balance", {"client_id": 1}, "operator", db)
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+@pytest.mark.parametrize("status", list(OrderStatus))
+def test_supervisor_may_update_to_every_valid_status(status, db):
+    """The only write tool must actually be callable, for every status it supports."""
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": 1, "new_status": status.value, "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+    assert decision.requires_confirmation is True
+
+
+def test_bool_is_rejected_as_client_id(db):
+    """bool is an int subclass; safe_args must not silently substitute 1 for True."""
+    decision = policy.evaluate("get_client_balance", {"client_id": True}, "operator", db)
+    assert decision.reason == "invalid_arguments"
+
+
+def test_bool_is_rejected_as_order_id(db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": True, "new_status": "delivered", "reason": "motivo valido"},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+def test_bool_is_rejected_as_limit(db):
+    decision = policy.evaluate("get_sales_orders", {"limit": True}, "operator", db)
+    assert decision.reason == "invalid_arguments"
+
+
+def test_safe_args_cannot_be_mutated_after_the_fact(db):
+    """safe_args is the audit truth of what ran; it must not be rewritable in place."""
+    decision = policy.evaluate("get_sales_orders", {}, "operator", db)
+    with pytest.raises(TypeError):
+        decision.safe_args["limit"] = 999999
+
+
+def test_role_permissions_table_cannot_be_mutated_in_place():
+    """Nothing inside the process may rewrite who is allowed to do what."""
+    with pytest.raises(TypeError):
+        policy.ROLE_PERMISSIONS["operator"] = frozenset({"update_order_status"})
+
+
+def test_whitespace_only_reason_is_rejected(db):
+    decision = policy.evaluate(
+        "update_order_status",
+        {"order_id": 1, "new_status": "delivered", "reason": "   "},
+        "supervisor",
+        db,
+    )
+    assert decision.reason == "invalid_arguments"
+
+
+def test_every_tool_schema_is_reachable_by_some_role():
+    """Catches a tool added to TOOL_SCHEMAS but forgotten in ROLE_PERMISSIONS, or vice versa."""
+    assert set(policy.TOOL_SCHEMAS) == frozenset().union(*policy.ROLE_PERMISSIONS.values())
