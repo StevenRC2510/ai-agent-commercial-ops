@@ -1,11 +1,27 @@
-# Commercial Operations Platform — SPEC 1
+# Commercial Operations Platform
 
-Plataforma determinista de operaciones comerciales para una PyME automotriz: modelo de
-datos, tres operaciones de negocio como funciones puras, y una capa de política que decide
-qué rol puede ejecutar qué — **sin ninguna integración con un LLM**. El modelo de lenguaje
-nunca es la autoridad sobre permisos; eso lo decide código Python determinista, testeado sin
-red ni credenciales. SPEC 2 (fuera de alcance aquí, ver `docs/SPEC-2.md`) añade el agente
-sobre esta base.
+Agente de operaciones comerciales para una PyME automotriz: consulta órdenes y saldos, y
+cambia el estado de una orden **solo cuando un humano lo autoriza explícitamente**.
+
+La idea que sostiene el diseño es una sola: **el modelo propone, la política decide.** El LLM
+nunca es la autoridad sobre permisos. Cada llamada a herramienta que propone pasa por
+`app/application/policy.py`, código Python determinista que no importa `anthropic`, `fastapi`
+ni `httpx` — y un test de arquitectura falla si alguien lo intenta. Por eso la capa de
+autorización se puede testear entera sin red y sin credenciales.
+
+De ahí se derivan las dos decisiones que más se notan al usarlo:
+
+- **La confirmación va fuera de banda.** Aprobar un cambio es un evento HTTP autenticado
+  sobre un identificador opaco de un solo uso, no escribir «sí» en el chat. Texto que el
+  modelo genera —o que un atacante inyecta en un dato— nunca puede valer como consentimiento.
+- **El consentimiento está atado al estado.** `/confirm` compara el estado actual contra el
+  que el usuario vio al aprobar. Si la orden se movió entre medias, se rechaza aunque la
+  transición siga siendo legal ([ADR 0009](docs/adr/0009-consent-bound-to-state.md)).
+
+`docs/SPEC-1.md` cubre la plataforma determinista; `docs/SPEC-2.md`, el agente, la API y el
+frontend. Las decisiones y sus porqués están en [`docs/adr/`](docs/adr/), y
+[`docs/conversaciones-ejemplo.md`](docs/conversaciones-ejemplo.md) muestra los flujos
+funcionando con transcripciones reales.
 
 ## Quickstart
 
@@ -14,8 +30,16 @@ git clone <repo-url> commercial-ops && cd commercial-ops
 docker compose up --build
 ```
 
-No hace falta crear ningún `.env`: todas las variables tienen un valor de desarrollo por
-defecto en `docker-compose.yml` (ver `.env.example` para el contrato completo de nombres).
+**Funciona sin API key.** `DEMO_MODE` viene activado por defecto y sustituye al modelo por un
+cliente determinista guiado por palabras clave que cubre los tres flujos completos, incluida
+la tarjeta de confirmación. No hace falta crear ningún `.env`: todas las variables tienen un
+valor de desarrollo por defecto en `docker-compose.yml` (ver `.env.example` para el contrato
+completo de nombres). Es una decisión de producto —permite evaluar el sistema sin
+credenciales ni costo—, no un atajo de tests.
+
+Para usar el modelo real, pon `ANTHROPIC_API_KEY` y `DEMO_MODE=false` en un `.env`. Si falta
+la clave con `DEMO_MODE=false`, la aplicación **no arranca**: falla al construir la
+configuración en vez de romperse en la primera conversación del usuario.
 
 - Backend: http://localhost:8000/health y http://localhost:8000/ready
 - Frontend: http://localhost:5173
@@ -186,6 +210,34 @@ es que nadie lo midió.
 Los 117 tests de `backend/tests/evals/` prueban el arnés — la aritmética del resumen, la carga
 del fichero de casos, el renderizado y la negativa a arrancar sin clave — con dobles, y están
 etiquetados como tests del arnés en su docstring. No son resultados de evaluación.
+
+## Costo y prompt caching
+
+Cada turno acumula su costo en la sesión y hay un tope por conversación
+(`MAX_COST_PER_SESSION_USD`). El costo se contabiliza en **las siete rutas de salida** de
+`run_turn`, no solo en la exitosa: un turno que termina en confirmación pendiente o en error
+también gastó tokens, y no contarlos haría que el tope saltara tarde o nunca.
+
+Sobre prompt caching, la decisión fue **no activarlo**, y se tomó midiendo:
+
+```bash
+make measure-prompt
+```
+
+```
+role        tools  system  schemas  total   est. tokens  floor at  verdict
+operator        2    1509     1656   3165      792-1266     0.773  below_floor
+supervisor      3    1511     2566   4077     1020-1631     0.995  below_floor
+```
+
+El prefijo cacheable —system prompt más los esquemas de herramientas— queda entre tres y
+cuatro veces por debajo del mínimo de 4.096 tokens de `claude-haiku-4-5`. La columna
+`floor at` es lo que hace la conclusión sólida: el prefijo más grande solo alcanzaría el
+umbral a 0,995 caracteres por token, es decir, si el tokenizador produjera más de un token por
+carácter. La conclusión no depende del ratio estimado. Activar `cache_control` no cachearía
+nada, y afirmar una optimización inerte es peor que no tenerla — el razonamiento completo y
+qué cambiaría la respuesta están en
+[ADR 0011](docs/adr/0011-no-prompt-caching.md).
 
 ## Limitaciones
 

@@ -112,7 +112,7 @@ def test_a_turn_that_costs_money_accumulates_it_on_the_session(client, seeded, s
 
 
 def test_a_confirmation_turn_bills_the_session_for_what_it_spent(client, db, seeded, sessions):
-    """The write path reports no telemetry, and used to be billed as if it were free."""
+    """The write path used to be billed as if it were free."""
     order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
     app.dependency_overrides[get_llm] = lambda: ScriptedClient(
         [
@@ -129,6 +129,21 @@ def test_a_confirmation_turn_bills_the_session_for_what_it_spent(client, db, see
     )
     assert response.json()["type"] == "confirmation_required"
     assert sessions.get_or_create("s-1").accumulated_cost_usd == _HALF_DOLLAR
+
+
+def test_a_confirmation_card_carries_the_telemetry_of_the_turn_that_proposed_it(client, db, seeded):
+    """SPEC-2 §9 point 5: the card is an agent response, so it gets the same footer."""
+    order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
+    app.dependency_overrides[get_llm] = lambda: ScriptedClient(
+        [write_proposal(order.id, OrderStatus.DELIVERED)]
+    )
+    body = client.post(
+        "/chat", json={"message": "cambia la orden", "session_id": "s-1"}, headers=_supervisor()
+    ).json()
+    assert body["type"] == "confirmation_required"
+    assert body["telemetry"]["input_tokens"] == 10
+    assert body["telemetry"]["output_tokens"] == 5
+    assert body["telemetry"]["iterations"] == 1
 
 
 def test_an_error_turn_bills_the_session_for_what_it_spent(client, seeded, sessions):

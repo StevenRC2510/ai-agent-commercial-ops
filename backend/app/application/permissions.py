@@ -19,7 +19,11 @@ class ToolName(str, Enum):
 
 
 class DenialReason(str, Enum):
-    """The closed set of reasons evaluate() may deny a call. Task 9 adds no new member lightly."""
+    """The closed set of reasons a call may be refused, by the policy or by /confirm.
+
+    CONSENT_UNUSABLE is deliberately one code for every unusable consent: unknown, expired
+    and already-spent must stay indistinguishable, or /confirm becomes an oracle over ids.
+    """
 
     UNKNOWN_TOOL = "unknown_tool"
     ROLE_LACKS_PERMISSION = "role_lacks_permission"
@@ -27,6 +31,7 @@ class DenialReason(str, Enum):
     ORDER_NOT_FOUND = "order_not_found"
     INVALID_STATUS_TRANSITION = "invalid_status_transition"
     STATE_CHANGED_SINCE_CONSENT = "state_changed_since_consent"
+    CONSENT_UNUSABLE = "consent_unusable"
 
 
 ROLE_PERMISSIONS: MappingProxyType[Role, frozenset[ToolName]] = MappingProxyType(

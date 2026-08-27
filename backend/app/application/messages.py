@@ -16,6 +16,8 @@ DENIAL_TEXTS: Mapping[DenialReason, str] = {
     DenialReason.STATE_CHANGED_SINCE_CONSENT: (
         "La orden cambió de estado desde que aprobaste esta acción. Vuelve a intentarlo."
     ),
+    # One text for every unusable consent: the caller must not learn which cause applied.
+    DenialReason.CONSENT_UNUSABLE: "Esta confirmación ya no es válida. Vuelve a pedir el cambio.",
 }
 
 # Fixed, safe text for orchestrator failure paths: never derived from model output.
@@ -38,6 +40,5 @@ FALLBACK_INTERNAL_ERROR = (
 
 # HTTP surface. UNAUTHENTICATED names no role: an unauthenticated caller learns nothing.
 UNAUTHENTICATED = "No pude identificar tu sesión. Vuelve a iniciarla."
-CONSENT_UNAVAILABLE = "Esta confirmación ya no es válida. Vuelve a pedir el cambio."
 CONFIRMATION_EXECUTED = "Cambio aplicado. {summary}"
 CONFIRMATION_CANCELLED = "Cancelado. No se aplicó ningún cambio."

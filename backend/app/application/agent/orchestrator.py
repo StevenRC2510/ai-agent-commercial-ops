@@ -43,8 +43,8 @@ _ZERO_COST = Decimal("0.00")
 class TurnResult:
     """`cost_usd` is what THIS turn spent, and it has no default on purpose.
 
-    Telemetry only exists for a turn that reached a final message; billing must not
-    depend on how the turn ended, so a missing cost fails construction instead.
+    Telemetry exists for any turn that reached the model; billing must not depend on
+    how the turn ended, so a missing cost fails construction instead.
     """
 
     type: Literal["message", "confirmation_required", "error"]
@@ -115,6 +115,7 @@ def _confirmation_result(
     store: PendingActionStore,
     log_fn: LogFn,
     cost_usd: Decimal,
+    telemetry: dict[str, Any],
 ) -> TurnResult:
     if decision.change is None:
         raise AssertionError("requires_confirmation implies policy set a change")
@@ -138,6 +139,7 @@ def _confirmation_result(
         cost_usd=cost_usd,
         pending_id=pending_id,
         pending_summary=summary,
+        telemetry=telemetry,
     )
 
 
@@ -227,13 +229,14 @@ def run_turn(
 
         messages.append({"role": "assistant", "content": response.content})
 
+        telemetry = {
+            "latency_ms": total_latency_ms,
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "iterations": iteration + 1,
+        }
+
         if response.stop_reason != "tool_use":
-            telemetry = {
-                "latency_ms": total_latency_ms,
-                "input_tokens": total_input_tokens,
-                "output_tokens": total_output_tokens,
-                "iterations": iteration + 1,
-            }
             return TurnResult(
                 type="message",
                 text=_extract_text(response.content),
@@ -296,6 +299,7 @@ def run_turn(
                     store=pending_store,
                     log_fn=log,
                     cost_usd=turn_cost,
+                    telemetry=telemetry,
                 )
 
             exec_started = time.monotonic()

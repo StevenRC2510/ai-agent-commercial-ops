@@ -459,6 +459,7 @@ def test_a_confirmation_decision_without_a_change_is_an_invariant_violation() ->
             store=_store(),
             log_fn=_log,
             cost_usd=Decimal("0.00"),
+            telemetry={},
         )
 
 
@@ -531,8 +532,8 @@ def test_the_budget_guard_bills_nothing_for_the_turn_it_refuses_to_start(db, see
     assert result.cost_usd == Decimal("0.00")
 
 
-def test_a_confirmation_turn_reports_the_calls_it_paid_for(db, seeded):
-    """The write path carries no telemetry, so cost_usd is the only record of its spend."""
+def _confirmation_turn(db):
+    """Drives a supervisor write proposal to the confirmation card."""
     order = db.query(Order).filter_by(status=OrderStatus.IN_PROGRESS).first()
     llm = ScriptedClient(
         [
@@ -544,7 +545,7 @@ def test_a_confirmation_turn_reports_the_calls_it_paid_for(db, seeded):
             )
         ]
     )
-    result = _run(
+    return _run(
         user_message="x",
         role=Role.SUPERVISOR.value,
         actor="u-1",
@@ -553,6 +554,21 @@ def test_a_confirmation_turn_reports_the_calls_it_paid_for(db, seeded):
         llm=llm,
         trace_id="abc12345",
     )
+
+
+def test_a_confirmation_turn_reports_the_telemetry_of_the_call_that_produced_it(db, seeded):
+    """The card is a turn like any other: the numbers exist, they were merely not carried."""
+    result = _confirmation_turn(db)
+    assert result.type == "confirmation_required"
+    assert result.telemetry["input_tokens"] == 10
+    assert result.telemetry["output_tokens"] == 5
+    assert result.telemetry["iterations"] == 1
+    assert result.telemetry["latency_ms"] >= 0
+
+
+def test_a_confirmation_turn_reports_the_calls_it_paid_for(db, seeded):
+    """cost_usd is billing, not telemetry: it must be right whatever the turn's type."""
+    result = _confirmation_turn(db)
     assert result.type == "confirmation_required"
     assert result.cost_usd == _cost(10, 5)
 

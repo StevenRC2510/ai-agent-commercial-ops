@@ -15,6 +15,7 @@ from app.application.permissions import ToolName
 from app.application.ports import LLMResponse
 from app.config import settings
 from app.domain.constants import OrderStatus
+from app.infrastructure import obs
 from app.infrastructure.llm.scripted import ScriptedClient
 from app.infrastructure.pending.memory import InMemoryPendingActionStore
 from app.infrastructure.session.memory import ConversationStore
@@ -84,6 +85,18 @@ def pending_store():
 @pytest.fixture
 def sessions():
     return ConversationStore(history_max_turns=settings.history_max_turns)
+
+
+@pytest.fixture
+def logged(monkeypatch):
+    """Structured events as (event, fields), with trace_id folded in so joins are assertable."""
+    events: list[tuple[str, dict]] = []
+
+    def record(trace_id, event, **fields):
+        events.append((event, {"trace_id": trace_id, **fields}))
+
+    monkeypatch.setattr(obs, "log", record)
+    return events
 
 
 @pytest.fixture
