@@ -18,6 +18,10 @@ DENIAL_TEXTS: Mapping[DenialReason, str] = {
     ),
     # One text for every unusable consent: the caller must not learn which cause applied.
     DenialReason.CONSENT_UNUSABLE: "Esta confirmación ya no es válida. Vuelve a pedir el cambio.",
+    # Names neither the caller nor the budget: a throttled request is not an oracle either.
+    DenialReason.RATE_LIMITED: (
+        "Alcanzaste el límite de solicitudes. Espera un momento y vuelve a intentarlo."
+    ),
 }
 
 # Fixed, safe text for orchestrator failure paths: never derived from model output.

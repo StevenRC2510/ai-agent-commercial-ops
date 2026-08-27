@@ -23,7 +23,7 @@ class ToolName(str, Enum):
 
 
 class DenialReason(str, Enum):
-    """The closed set of reasons a call may be refused, by the policy or by /confirm.
+    """The closed set of reasons a call may be refused, by the policy, /confirm or the edge.
 
     CONSENT_UNUSABLE is deliberately one code for every unusable consent: unknown, expired
     and already-spent must stay indistinguishable, or /confirm becomes an oracle over ids.
@@ -36,6 +36,7 @@ class DenialReason(str, Enum):
     INVALID_STATUS_TRANSITION = "invalid_status_transition"
     STATE_CHANGED_SINCE_CONSENT = "state_changed_since_consent"
     CONSENT_UNUSABLE = "consent_unusable"
+    RATE_LIMITED = "rate_limited"
 
 
 ROLE_PERMISSIONS: MappingProxyType[Role, frozenset[ToolName]] = MappingProxyType(

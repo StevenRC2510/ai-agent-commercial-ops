@@ -2,9 +2,9 @@
 
 from dataclasses import asdict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from app.api.deps import Context, DbSession, Llm, PendingStore, Sessions
+from app.api.deps import Context, DbSession, Llm, PendingStore, Sessions, enforce_rate_limit
 from app.api.schemas import ChatRequest, TurnResponse
 from app.application.agent.orchestrator import run_turn
 from app.application.session_memory import trim_history
@@ -13,7 +13,8 @@ from app.infrastructure import obs
 router = APIRouter(tags=["agent"])
 
 
-@router.post("/chat", response_model=TurnResponse)
+# Only this endpoint is throttled: /confirm calls no model, so it costs no tokens.
+@router.post("/chat", response_model=TurnResponse, dependencies=[Depends(enforce_rate_limit)])
 def chat(
     payload: ChatRequest,
     ctx: Context,

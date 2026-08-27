@@ -4,14 +4,17 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.deps import RateLimitExceededError
 from app.api.middleware import TRACE_HEADER, TraceIdMiddleware
 from app.api.routes import chat, confirm, health
 from app.api.schemas import TurnResponse
+from app.application import presentation
 from app.application.messages import FALLBACK_INTERNAL_ERROR
+from app.application.permissions import DenialReason
 from app.config import settings
 from app.infrastructure import obs
 from app.infrastructure.db import SessionLocal, create_schema
@@ -56,6 +59,22 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     body = TurnResponse(type="error", text=FALLBACK_INTERNAL_ERROR, trace_id=trace_id)
     return JSONResponse(
         status_code=500, content=body.model_dump(), headers={TRACE_HEADER: trace_id}
+    )
+
+
+@app.exception_handler(RateLimitExceededError)
+async def handle_rate_limited(request: Request, exc: RateLimitExceededError) -> JSONResponse:
+    """Answer the standard error envelope; who was throttled is logged, never published."""
+    trace_id = getattr(request.state, "trace_id", "")
+    obs.log(trace_id, "rate_limited", level=logging.WARNING, actor=str(exc))
+    reason = DenialReason.RATE_LIMITED.value
+    body = TurnResponse(
+        type="error", text=presentation.render_denial(reason), trace_id=trace_id, reason_code=reason
+    )
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content=body.model_dump(),
+        headers={TRACE_HEADER: trace_id},
     )
 
 

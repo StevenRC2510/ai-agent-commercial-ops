@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from urllib.parse import urlparse
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.application.constants import Model
@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     test_database_url: str = (
         "postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test"
     )
+    # Milliseconds; 0 is Postgres' own way to spell "no ceiling", so it needs no extra flag.
+    db_statement_timeout_ms: int = Field(default=5000, ge=0)
     log_level: str = "INFO"
     seed_anchor_date: str = ""
     frontend_origin: str = "http://localhost:5173"
@@ -51,6 +53,10 @@ class Settings(BaseSettings):
     max_message_chars: int = 2000
     pending_action_ttl_seconds: int = 300
     history_max_turns: int = 6
+    # A dedicated flag, not a zero: "0 requests" reads as "block everything", the opposite.
+    chat_rate_limit_enabled: bool = True
+    chat_rate_limit_max_requests: int = Field(default=20, ge=1)
+    chat_rate_limit_window_seconds: int = Field(default=60, ge=1)
 
     @field_validator("database_url")
     @classmethod

@@ -220,6 +220,13 @@ Cada turno acumula su costo en la sesión y hay un tope por conversación
 `run_turn`, no solo en la exitosa: un turno que termina en confirmación pendiente o en error
 también gastó tokens, y no contarlos haría que el tope saltara tarde o nunca.
 
+Ese tope protege una conversación, no la cuenta: cien sesiones nuevas la vaciarían igual. Por
+eso `/chat` lleva además un límite por usuario (`CHAT_RATE_LIMIT_*`), y una sesión nueva no
+compra presupuesto nuevo. `/confirm` queda deliberadamente fuera: no gasta tokens, ya está
+limitado de forma transitiva —solo se llega con un `pending_id` que únicamente un `/chat`
+exitoso puede emitir— y bloquearlo dejaría al usuario sin poder aprobar una tarjeta que ya
+recibió, lo que **aumentaría** el gasto al obligarle a repetir la petición.
+
 Sobre prompt caching, la decisión fue **no activarlo**, y se tomó midiendo:
 
 ```bash
@@ -254,6 +261,14 @@ qué cambiaría la respuesta están en
 - **La identidad es una cabecera sin autenticar** (`X-User-Role`, `X-User-Id`), un sustituto
   de un claim JWT verificado. Cambiarla por autenticación real toca un único adaptador —
   donde `api/deps.py` extrae `actor` y `role` — y cero líneas de `policy.py`.
+- **Las conversaciones viven en memoria y se pierden al reiniciar.** `ConversationStore` es un
+  diccionario en proceso, así que tampoco se comparte entre réplicas. Persistirlas es una tabla
+  y un adaptador que implemente la misma interfaz; nada de la política ni del orquestador
+  cambia, porque ninguno de los dos sabe dónde vive el historial.
+- **El versionado de prompt está a medias.** `PROMPT_VERSION` viaja en los logs y en el reporte
+  de evals, pero nada correlaciona todavía una versión con sus resultados — que es para lo que
+  existe: cambiar el prompt, subir la versión, volver a medir y comparar. La segunda mitad no
+  puede existir mientras no haya habido una primera corrida contra el modelo real.
 - **Un solo idioma.** El enunciado describe una concesionaria hispanohablante. Añadir i18n no
   sería trabajo de traducción: la frase del consentimiento se compone en el servidor y **es**
   el artefacto de auditoría, así que el idioma tendría que llegar como campo explícito de la

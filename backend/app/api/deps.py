@@ -21,6 +21,7 @@ from app.infrastructure.db import SessionLocal
 from app.infrastructure.llm.anthropic import AnthropicClient
 from app.infrastructure.llm.demo import DemoClient
 from app.infrastructure.pending.memory import InMemoryPendingActionStore
+from app.infrastructure.ratelimit.memory import InMemoryRateLimiter
 from app.infrastructure.session.memory import ConversationStore
 
 _pending_store = InMemoryPendingActionStore(
@@ -28,6 +29,15 @@ _pending_store = InMemoryPendingActionStore(
     clock=lambda: datetime.now(UTC),
 )
 _sessions = ConversationStore(history_max_turns=settings.history_max_turns)
+_rate_limiter = InMemoryRateLimiter(
+    max_requests=settings.chat_rate_limit_max_requests,
+    window_seconds=settings.chat_rate_limit_window_seconds,
+    clock=lambda: datetime.now(UTC),
+)
+
+
+class RateLimitExceededError(Exception):
+    """The caller has spent its request budget for the current window."""
 
 
 def get_db() -> Iterator[Session]:
@@ -45,6 +55,10 @@ def get_pending_store() -> PendingActionStore:
 
 def get_sessions() -> ConversationStore:
     return _sessions
+
+
+def get_rate_limiter() -> InMemoryRateLimiter:
+    return _rate_limiter
 
 
 def get_context(
@@ -80,4 +94,14 @@ Context = Annotated[AuditContext, Depends(get_context)]
 DbSession = Annotated[Session, Depends(get_db)]
 Llm = Annotated[LLMClient, Depends(get_llm)]
 PendingStore = Annotated[PendingActionStore, Depends(get_pending_store)]
+RateLimiter = Annotated[InMemoryRateLimiter, Depends(get_rate_limiter)]
 Sessions = Annotated[ConversationStore, Depends(get_sessions)]
+
+
+def enforce_rate_limit(ctx: Context, limiter: RateLimiter) -> None:
+    """Charge the caller, not the session: a fresh session_id must not buy a fresh budget.
+
+    Depends on Context, so an unauthenticated caller is refused before it can spend anything.
+    """
+    if settings.chat_rate_limit_enabled and not limiter.allow(ctx.actor):
+        raise RateLimitExceededError(ctx.actor)

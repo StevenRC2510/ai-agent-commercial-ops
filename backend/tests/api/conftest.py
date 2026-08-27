@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_db, get_llm, get_pending_store, get_sessions
+from app.api.deps import get_db, get_llm, get_pending_store, get_rate_limiter, get_sessions
 from app.application.constants import Model
 from app.application.permissions import ToolName
 from app.application.ports import LLMResponse
@@ -18,6 +18,7 @@ from app.domain.constants import OrderStatus
 from app.infrastructure import obs
 from app.infrastructure.llm.scripted import ScriptedClient
 from app.infrastructure.pending.memory import InMemoryPendingActionStore
+from app.infrastructure.ratelimit.memory import InMemoryRateLimiter
 from app.infrastructure.session.memory import ConversationStore
 from app.main import app
 
@@ -88,6 +89,16 @@ def sessions():
 
 
 @pytest.fixture
+def rate_limiter():
+    """One limiter per test: the process-wide singleton would leak counts between them."""
+    return InMemoryRateLimiter(
+        max_requests=settings.chat_rate_limit_max_requests,
+        window_seconds=settings.chat_rate_limit_window_seconds,
+        clock=lambda: datetime.now(UTC),
+    )
+
+
+@pytest.fixture
 def logged(monkeypatch):
     """Structured events as (event, fields), with trace_id folded in so joins are assertable."""
     events: list[tuple[str, dict]] = []
@@ -100,11 +111,12 @@ def logged(monkeypatch):
 
 
 @pytest.fixture
-def client(db, pending_store, sessions):
+def client(db, pending_store, sessions, rate_limiter):
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_llm] = lambda: ScriptedClient([text_response(DEFAULT_REPLY)])
     app.dependency_overrides[get_pending_store] = lambda: pending_store
     app.dependency_overrides[get_sessions] = lambda: sessions
+    app.dependency_overrides[get_rate_limiter] = lambda: rate_limiter
     try:
         # raise_server_exceptions=False so the global handler's response is observable.
         yield TestClient(app, raise_server_exceptions=False)
