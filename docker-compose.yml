@@ -3,13 +3,15 @@ services:
     image: postgres:16-alpine
     # Port 5432 is deliberately not published: reachable only inside the network.
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_password}
-      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      POSTGRES_USER: ${POSTGRES_USER:-commercial_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-commercial_ops_password}
+      POSTGRES_DB: ${POSTGRES_DB:-commercial_ops}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Only runs on volume init: `docker compose down -v` is required after adding/changing scripts here.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-commercial_ops} -d ${POSTGRES_DB:-commercial_ops}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -23,7 +25,8 @@ services:
       - ./backend/app:/app/app
       - ./backend/tests:/app/tests
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app_password@db:5432/app_db}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops}
+      TEST_DATABASE_URL: ${TEST_DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}

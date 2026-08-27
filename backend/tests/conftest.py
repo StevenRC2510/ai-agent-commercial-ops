@@ -21,10 +21,17 @@ from app.domain.models import Base
 
 _TABLES = ", ".join(t.name for t in Base.metadata.sorted_tables)
 
+# db_real truncates tables; if test and app URLs ever match, this would destroy app data.
+if settings.test_database_url == settings.database_url:
+    raise RuntimeError(
+        "Refusing to run: the test database is the application database. "
+        "db_real truncates tables and would destroy application data."
+    )
+
 
 @pytest.fixture(scope="session")
 def engine():
-    eng = create_engine(settings.database_url, future=True, pool_pre_ping=True)
+    eng = create_engine(settings.test_database_url, future=True, pool_pre_ping=True)
     Base.metadata.create_all(eng)
     with eng.begin() as conn:
         conn.execute(text(f"TRUNCATE {_TABLES} RESTART IDENTITY CASCADE"))

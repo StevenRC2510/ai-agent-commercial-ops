@@ -10,7 +10,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+psycopg://app:app_password@db:5432/app_db"
+    database_url: str = (
+        "postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops"
+    )
+    test_database_url: str = (
+        "postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test"
+    )
     log_level: str = "INFO"
     seed_anchor_date: str = ""
     frontend_origin: str = "http://localhost:5173"

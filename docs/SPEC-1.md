@@ -441,13 +441,15 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_password}
-      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      POSTGRES_USER: ${POSTGRES_USER:-commercial_ops}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-commercial_ops_password}
+      POSTGRES_DB: ${POSTGRES_DB:-commercial_ops}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Only runs on volume init: `docker compose down -v` is required after adding/changing scripts here.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-commercial_ops} -d ${POSTGRES_DB:-commercial_ops}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -462,7 +464,8 @@ services:
       - ./backend/app:/app/app
       - ./backend/tests:/app/tests
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app_password@db:5432/app_db}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops}
+      TEST_DATABASE_URL: ${TEST_DATABASE_URL:-postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SEED_ANCHOR_DATE: ${SEED_ANCHOR_DATE:-}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
@@ -493,6 +496,8 @@ Nótese que ningún servicio delega en un archivo de variables de entorno extern
 
 Los volúmenes de `backend` montan `app/` y `tests/` del host sobre la copia horneada en la imagen: así el contenedor siempre ejecuta el árbol de trabajo, sin necesidad de reconstruir la imagen en cada cambio de código. La imagen sigue conteniendo `app/` y `tests/` vía `COPY` en el `Dockerfile` — el montaje solo los oculta en desarrollo — para que siga siendo ejecutable de forma autónoma. `PYTHONDONTWRITEBYTECODE=1` evita que el intérprete 3.11 del contenedor escriba `.pyc` incompatibles en un árbol que también usa un venv de host en otra versión de Python.
 
+`db/init/01-create-test-database.sh` crea `${POSTGRES_DB}_test` cuando Postgres inicializa el volumen `pgdata`; la base de tests es una base distinta de `commercial_ops` porque `db_real` hace `TRUNCATE ... CASCADE` y nunca debe poder alcanzar los datos sembrados de la aplicación. Postgres solo ejecuta los scripts de `docker-entrypoint-initdb.d` al inicializar el volumen, así que tras añadir o modificar este script hace falta `docker compose down -v`. `conftest.py` verifica en tiempo de colección que `TEST_DATABASE_URL` y `DATABASE_URL` no coincidan, y aborta con `RuntimeError` si lo hacen.
+
 `.env.example`, con un comentario por variable:
 
 ```bash
@@ -504,10 +509,11 @@ Los volúmenes de `backend` montan `app/` y `tests/` del host sobre la copia hor
 # default and must fail loudly when missing.
 
 # --- Database (local development credentials only) ---
-POSTGRES_USER=app
-POSTGRES_PASSWORD=app_password        # override in any shared environment
-POSTGRES_DB=app_db
-DATABASE_URL=postgresql+psycopg://app:app_password@db:5432/app_db
+POSTGRES_USER=commercial_ops
+POSTGRES_PASSWORD=commercial_ops_password        # override in any shared environment
+POSTGRES_DB=commercial_ops
+DATABASE_URL=postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops
+TEST_DATABASE_URL=postgresql+psycopg://commercial_ops:commercial_ops_password@db:5432/commercial_ops_test  # separate DB: tests truncate it
 
 # --- Behaviour ---
 LOG_LEVEL=INFO
