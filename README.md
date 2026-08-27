@@ -73,15 +73,16 @@ lista blanca cerrada de imports permitidos — no una lista negra, para que un i
 indebido falle el test en vez de colarse. `app/config.py`, `app/main.py` y `app/__main__.py`
 son la raíz de composición y están explícitamente exentos y nombrados en ese mismo test.
 
-El frontend sigue un layout por feature (ADR 0004): en esta fase solo existe el andamiaje
-(`shared/ui/HealthIndicator`, `shared/lib/httpClient` validado con Zod, `QueryProvider`);
-`features/chat/` queda reservado y vacío para SPEC 2.
+El frontend sigue un layout por feature (ADR 0004) con interior hexagonal: `features/chat/`
+tiene su `domain/`, `application/` (los hooks), `infrastructure/` (el `ChatGateway` con dos
+implementaciones) y `ui/`, y solo se importa por su `index.ts`. ESLint impide que `ui/`
+alcance un adaptador o `react-query` directamente, para que la UI consuma hooks y no
+transporte.
 
 ## Decisiones técnicas
 
 Cada decisión de fondo tiene su ADR en `docs/adr/`; aquí solo el enlace y el porqué en una
-línea. El detalle día a día — ambigüedades resueltas, abstracciones descartadas,
-limitaciones — está en `NOTES.md`.
+línea.
 
 - [ADR 0001](docs/adr/0001-postgresql-over-sqlite.md) — PostgreSQL, no SQLite: `Numeric` exacto para dinero, sin coerción a `float`.
 - [ADR 0002](docs/adr/0002-out-of-band-write-confirmation.md) — confirmación de escritura fuera de banda (SPEC 2): el consentimiento es HTTP, no texto de chat.
@@ -93,6 +94,7 @@ limitaciones — está en `NOTES.md`.
 - [ADR 0008](docs/adr/0008-no-model-router.md) — sin router de modelos (SPEC 2): una sola tarea, un solo modelo configurado.
 - [ADR 0009](docs/adr/0009-consent-bound-to-state.md) — el consentimiento se ata al estado, no solo a la acción (SPEC 2): "legal" no es lo mismo que "lo que la persona aprobó".
 - [ADR 0010](docs/adr/0010-no-streaming.md) — sin streaming (SPEC 2): un bloque `tool_use` no puede mostrarse a medio dibujar cuando la política aún puede denegarlo.
+- [ADR 0011](docs/adr/0011-no-prompt-caching.md) — sin prompt caching: el prefijo cacheable queda tres veces por debajo del mínimo del modelo, medido antes de decidir.
 
 ## Calidad de código
 
@@ -113,7 +115,7 @@ y `npm audit --audit-level=high` corren en CI (`.github/workflows/ci.yml`). Hoy,
 fijó a una versión traída por un `fastapi` cuya propia restricción la admite (nunca una
 `starlette` forzada contra el rango de un `fastapi` viejo), y `pip`/`setuptools` — que no son
 dependencias de ningún `requirements*.txt`, sino parte de la imagen base — se fijan
-explícitamente en el `Dockerfile`. Ver `NOTES.md` para el detalle versión por versión.
+explícitamente en el `Dockerfile`.
 
 El comando único para lint + tests + cobertura:
 
@@ -241,5 +243,18 @@ qué cambiaría la respuesta están en
 
 ## Limitaciones
 
-Las limitaciones conocidas, las ambigüedades resueltas y las abstracciones deliberadamente no
-construidas están documentadas en `NOTES.md`, para no duplicarlas aquí.
+- **Los evals nunca han corrido contra un modelo real.** El arnés, los 15 casos y la
+  puntuación están construidos y probados, pero la cuenta de Anthropic no tiene saldo y ni
+  `count_tokens` responde. La afirmación que más valdría — que el modelo real no obedece la
+  carga de inyección que viaja en el nombre de un cliente — es justo la que no se puede
+  sostener sin ejecutarla. No hay ninguna cifra estimada en su lugar.
+- **`AuditLog` es inmutable por convención, no por permiso de base de datos.** No existe
+  todavía un `REVOKE UPDATE, DELETE` a nivel de rol de Postgres, así que una credencial de
+  aplicación comprometida podría en teoría alterar el historial.
+- **La identidad es una cabecera sin autenticar** (`X-User-Role`, `X-User-Id`), un sustituto
+  de un claim JWT verificado. Cambiarla por autenticación real toca un único adaptador —
+  donde `api/deps.py` extrae `actor` y `role` — y cero líneas de `policy.py`.
+- **Un solo idioma.** El enunciado describe una concesionaria hispanohablante. Añadir i18n no
+  sería trabajo de traducción: la frase del consentimiento se compone en el servidor y **es**
+  el artefacto de auditoría, así que el idioma tendría que llegar como campo explícito de la
+  petición y quedar guardado junto al cambio estructurado y la frase renderizada.

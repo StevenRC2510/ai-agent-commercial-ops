@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 import type { ErrorBoundaryProps, ErrorBoundaryState } from "./ErrorBoundary.types";
+import { BODY, FALLBACK_BODY, FALLBACK_TITLE, TITLE, WRAPPER } from "./ErrorBoundary.constants";
 
 // The only class in the codebase: React offers no hook for componentDidCatch.
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -17,11 +18,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div role="alert" className="p-8">
-          <h1 className="text-xl font-semibold">Algo salió mal</h1>
-          <p className="mt-2 text-sm text-gray-600">
-            Ocurrió un error inesperado. Intenta recargar la página.
-          </p>
+        <div role="alert" className={WRAPPER}>
+          <h1 className={TITLE}>{FALLBACK_TITLE}</h1>
+          <p className={BODY}>{FALLBACK_BODY}</p>
         </div>
       );
     }
