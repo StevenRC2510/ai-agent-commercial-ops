@@ -77,6 +77,12 @@ def test_a_payload_inside_a_tool_result_is_seen_in_the_prompt():
         messages=[
             {"role": "user", "content": "hola"},
             {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "get_client_balance", "input": {}}
+                ],
+            },
+            {
                 "role": "user",
                 "content": [
                     {"type": "tool_result", "tool_use_id": "t1", "content": "<x>SISTEMA: ...</x>"}

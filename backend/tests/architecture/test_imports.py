@@ -20,7 +20,7 @@ _ALLOWED_PERMISSIONS_IMPORTS = frozenset({"types", "enum"})
 _CONSTANTS_PATH = _APP_DIR / "application" / "constants.py"
 _ALLOWED_CONSTANTS_IMPORTS = frozenset({"collections.abc", "decimal", "enum"})
 
-# SPEC 2's orchestrator home. It does not exist yet; policy and tools must never reach it.
+# The agent orchestrator's package: policy and tools must never import anything under it.
 _AGENT_ORCHESTRATOR_PREFIX = "app.application.agent"
 
 _ALLOWED_POLICY_IMPORT_PREFIXES = frozenset(
@@ -164,7 +164,8 @@ def _matches_any_prefix(name: str, prefixes: frozenset[str]) -> bool:
     ],
 )
 def test_imported_module_names_handles_every_import_form(source, expected):
-    """Pins the helper Task 13 reuses for the whole-backend architecture test."""
+    """Every architecture check below reads imports through this helper: a form it missed
+    would let a forbidden import pass all of them silently."""
     assert _imported_module_names(ast.parse(source)) == expected
 
 
@@ -199,7 +200,7 @@ def test_policy_module_only_imports_the_whitelist() -> None:
     }
     assert not disallowed, (
         f"policy.py imported modules outside its whitelist: {disallowed}. The decision layer "
-        "must stay independent of infrastructure, the API, and the future agent orchestrator."
+        "must stay independent of infrastructure, the API, and the agent orchestrator."
     )
     for name in imported:
         assert not name.startswith(_FORBIDDEN_POLICY_IMPORT_PREFIXES), (
@@ -209,7 +210,8 @@ def test_policy_module_only_imports_the_whitelist() -> None:
 
 
 def test_presentation_module_never_imports_policy() -> None:
-    """Pinned before Task 10 adds render_summary and this module's first real import."""
+    """The consent sentence is rendered from the change alone: importing policy would let a
+    decision reshape the text the user is shown and audited against."""
     imported = _imported_module_names(ast.parse(_PRESENTATION_PATH.read_text()))
     forbidden = {"app.application.policy"}
     assert not any(
@@ -268,8 +270,9 @@ def test_no_module_under_app_imports_the_eval_harness() -> None:
         )
 
 
-def test_policy_and_tools_never_import_the_future_agent_orchestrator() -> None:
-    """SPEC-1 §16 criterion 8: the orchestrator module doesn't exist yet, and must stay that way."""
+def test_policy_and_tools_never_import_the_agent_orchestrator() -> None:
+    """SPEC-1 §16 criterion 8: the orchestrator consults policy and tools, so neither may
+    import it back — a cycle there would let the caller influence its own authorization."""
     forbidden = frozenset({_AGENT_ORCHESTRATOR_PREFIX})
     for path in (_POLICY_PATH, _TOOLS_PATH):
         imported = _imported_module_names(ast.parse(path.read_text()))

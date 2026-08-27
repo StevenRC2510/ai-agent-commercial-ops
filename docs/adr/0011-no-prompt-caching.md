@@ -33,8 +33,8 @@ margen de error, que es lo que la vuelve utilizable sin la medición exacta.
 
 ## Decisión
 
-No se activa `cache_control` en ninguna petición. Con `claude-haiku-4-5` el prefijo está tres a
-cuatro veces por debajo del mínimo: cachearlo no ahorraría un token ni un centavo, y dejaría en
+No se activa `cache_control` en ninguna petición. Con `claude-haiku-4-5` el prefijo está entre
+dos veces y media y cuatro veces por debajo del mínimo, según dónde caiga el ratio real: cachearlo no ahorraría un token ni un centavo, y dejaría en
 el código una optimización que cualquier lector supondría activa.
 
 ## Consecuencias

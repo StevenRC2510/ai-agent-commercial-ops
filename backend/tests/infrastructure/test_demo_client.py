@@ -557,3 +557,11 @@ def test_a_number_after_an_ordinary_answer_is_not_treated_as_a_follow_up():
 
     assert response.stop_reason == "end_turn"
     assert _text_of(response) == CAPABILITIES_REPLY
+
+
+def test_each_proposal_gets_its_own_tool_use_id():
+    """One id shared by every proposal makes an orphan look answered by an unrelated turn."""
+    first = _reply_to("dame las ordenes pendientes")
+    second = _reply_to("¿cuál es el saldo del cliente 3?")
+
+    assert _only_block(first)["id"] != _only_block(second)["id"]
