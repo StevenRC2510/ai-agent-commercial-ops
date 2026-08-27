@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from app.application.constants import Model
 from app.application.pending import PendingAction
 
 
@@ -12,9 +13,9 @@ class LLMResponse:
     content: list[dict[str, Any]]
     input_tokens: int
     output_tokens: int
+    model: Model
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
-    model: str = ""
 
 
 class LLMClient(Protocol):

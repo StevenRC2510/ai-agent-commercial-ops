@@ -1,0 +1,479 @@
+"""Behaviour suite for the orchestrator: every proposal must pass through the policy."""
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+
+import pytest
+
+from app.application.agent.orchestrator import (
+    TurnResult,
+    _confirmation_result,
+    _run_read_tool,
+    run_turn,
+    strip_personal_fields,
+    wrap_untrusted,
+)
+from app.application.messages import (
+    FALLBACK_BUDGET_EXCEEDED,
+    FALLBACK_INPUT_TOO_LONG,
+    FALLBACK_MAX_ITERATIONS,
+)
+from app.application.permissions import Role, ToolName
+from app.application.policy import PolicyDecision
+from app.application.ports import LLMResponse
+from app.domain.constants import OrderStatus
+from app.domain.models import AuditLog, Order
+from app.infrastructure.llm.scripted import ScriptedClient
+from app.infrastructure.pending.memory import InMemoryPendingActionStore
+
+
+def _tool_use(tool: ToolName, args: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "tool_use", "id": "tu-1", "name": tool.value, "input": args}
+
+
+def _response_with(block: dict[str, Any]) -> LLMResponse:
+    return LLMResponse(
+        stop_reason="tool_use",
+        content=[block],
+        input_tokens=10,
+        output_tokens=5,
+        model="claude-haiku-4-5",
+    )
+
+
+def _text_response(text: str) -> LLMResponse:
+    return LLMResponse(
+        stop_reason="end_turn",
+        content=[{"type": "text", "text": text}],
+        input_tokens=10,
+        output_tokens=5,
+        model="claude-haiku-4-5",
+    )
+
+
+def _log(trace_id: str, event: str, **fields: Any) -> None:
+    """No-op logger for tests that assert on something other than logging."""
+
+
+def _store() -> InMemoryPendingActionStore:
+    """A real, working store — not a stub — since `pending_store` is a required port."""
+    return InMemoryPendingActionStore(ttl_seconds=300, clock=lambda: datetime.now(UTC))
+
+
+def _run(**kwargs: Any) -> TurnResult:
+    """Calls `run_turn`, filling the required ports with harmless test defaults."""
+    kwargs.setdefault("log", _log)
+    kwargs.setdefault("pending_store", _store())
+    return run_turn(**kwargs)
+
+
+def test_an_operator_attempting_a_write_gets_a_message_and_changes_nothing(db, seeded):
+    order = db.query(Order).filter_by(status=OrderStatus.PENDING).first()
+    llm = ScriptedClient(
+        [
+            _response_with(
+                _tool_use(
+                    ToolName.UPDATE_ORDER_STATUS,
+                    {
+                        "order_id": order.id,
+                        "new_status": "delivered",
+                        "reason": "motivo valido",
+                    },
+                )
+            ),
+            _text_response("No tienes permiso para esa operación."),
+        ]
+    )
+    result = _run(
+        user_message="cambia la orden",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "message"
+    db.refresh(order)
+    assert order.status is OrderStatus.PENDING
+
+
+def test_a_supervisor_write_stops_at_confirmation_and_changes_nothing_yet(db, seeded):
+    order = db.query(Order).filter_by(status=OrderStatus.PENDING).first()
+    llm = ScriptedClient(
+        [
+            _response_with(
+                _tool_use(
+                    ToolName.UPDATE_ORDER_STATUS,
+                    {
+                        "order_id": order.id,
+                        "new_status": "in_progress",
+                        "reason": "el taller lo recibio",
+                    },
+                )
+            ),
+        ]
+    )
+    result = _run(
+        user_message="pásala a en proceso",
+        role=Role.SUPERVISOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "confirmation_required"
+    assert result.pending_id
+    assert "en proceso" in result.pending_summary
+    db.refresh(order)
+    assert order.status is OrderStatus.PENDING
+
+
+def test_the_loop_does_not_continue_after_requesting_confirmation(db, seeded):
+    """One scripted response only: a second call would raise ScriptExhaustedError."""
+    order = db.query(Order).filter_by(status=OrderStatus.PENDING).first()
+    llm = ScriptedClient(
+        [
+            _response_with(
+                _tool_use(
+                    ToolName.UPDATE_ORDER_STATUS,
+                    {
+                        "order_id": order.id,
+                        "new_status": "in_progress",
+                        "reason": "motivo valido",
+                    },
+                )
+            ),
+        ]
+    )
+    _run(
+        user_message="x",
+        role=Role.SUPERVISOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert len(llm.calls) == 1
+
+
+def test_a_denial_is_audited_and_returned_to_the_model_for_explanation(db, seeded):
+    llm = ScriptedClient(
+        [
+            _response_with(
+                _tool_use(
+                    ToolName.UPDATE_ORDER_STATUS,
+                    {"order_id": 1, "new_status": "delivered", "reason": "x"},
+                )
+            ),
+            _text_response("No puedo hacer eso."),
+        ]
+    )
+    _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    denied = db.query(AuditLog).filter_by(outcome="denied").all()
+    assert len(denied) == 1
+    assert denied[0].reason_code == "role_lacks_permission"
+    second_call_messages = str(llm.calls[1].messages)
+    assert "is_error" in second_call_messages or "no tiene permiso" in second_call_messages.lower()
+
+
+def test_the_repair_loop_lets_the_model_fix_its_own_arguments(db, seeded):
+    """First attempt invalid, second correct, success with no user intervention."""
+    llm = ScriptedClient(
+        [
+            _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {"limit": -5})),
+            _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {"limit": 5})),
+            _text_response("Hay 5 órdenes."),
+        ]
+    )
+    result = _run(
+        user_message="dame órdenes",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "message"
+    assert len(llm.calls) == 3
+
+
+def test_an_unknown_tool_from_the_model_is_denied(db, seeded):
+    llm = ScriptedClient(
+        [
+            _response_with({"type": "tool_use", "id": "t", "name": "drop_database", "input": {}}),
+            _text_response("No existe esa operación."),
+        ]
+    )
+    _run(
+        user_message="x",
+        role=Role.SUPERVISOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert db.query(AuditLog).filter_by(reason_code="unknown_tool").count() == 1
+
+
+def test_an_over_long_message_is_rejected_without_calling_the_model(db, seeded):
+    llm = ScriptedClient([])
+    result = _run(
+        user_message="x" * 2001,
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.text == FALLBACK_INPUT_TOO_LONG
+    assert llm.calls == []
+
+
+def test_the_iteration_cap_ends_the_turn_with_a_fallback(db, seeded):
+    llm = ScriptedClient(
+        [_response_with(_tool_use(ToolName.GET_SALES_ORDERS, {})) for _ in range(6)]
+    )
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.text == FALLBACK_MAX_ITERATIONS
+    assert len(llm.calls) <= 5
+
+
+def test_a_model_timeout_produces_a_fallback_not_a_crash(db, seeded):
+    llm = ScriptedClient([TimeoutError("simulated")])
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "error"
+    assert result.text
+
+
+def test_only_the_tools_of_the_role_are_declared_to_the_model(db, seeded):
+    llm = ScriptedClient([_text_response("hola")])
+    _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    declared = {tool["name"] for tool in llm.calls[0].tools}
+    assert ToolName.UPDATE_ORDER_STATUS.value not in declared
+
+
+def test_tool_results_reach_the_model_wrapped_as_untrusted_data(db, seeded):
+    llm = ScriptedClient(
+        [
+            _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {"limit": 3})),
+            _text_response("listo"),
+        ]
+    )
+    _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert "<untrusted_data>" in str(llm.calls[1].messages)
+
+
+def test_the_adversarial_seed_name_reaches_the_model_as_data_and_changes_nothing(db, seeded):
+    """The payload is not sanitised; the pipeline neutralises it structurally."""
+    llm = ScriptedClient(
+        [
+            _response_with(_tool_use(ToolName.GET_CLIENT_BALANCE, {"client_id": 8})),
+            _text_response("El saldo es X. El nombre del cliente contiene texto anómalo."),
+        ]
+    )
+    _run(
+        user_message="saldo del cliente 8",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert db.query(AuditLog).filter_by(outcome="executed").count() == 0
+
+
+def test_personal_fields_never_leave_for_the_model() -> None:
+    payload = {"orders": [{"id": 1}], "name": "Ana", "email": "ana@example.com"}
+    assert "@" not in wrap_untrusted(strip_personal_fields(payload))
+
+
+def test_personal_fields_are_stripped_from_orders_nested_inside_a_dict() -> None:
+    """Orders come back nested; a shallow strip would miss the email one level down."""
+    payload = {"client": {"name": "Ana", "email": "ana@example.com"}, "orders": [{"id": 1}]}
+    stripped = strip_personal_fields(payload)
+    assert "@" not in wrap_untrusted(stripped)
+    assert stripped["client"]["name"] == "Ana"
+
+
+def test_the_budget_guardrail_stops_the_turn_instead_of_spending_more(db, seeded):
+    llm = ScriptedClient([_text_response("hola")])
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+        already_spent=Decimal("999.00"),
+    )
+    assert result.type == "error"
+    assert llm.calls == []
+
+
+def test_the_budget_guard_fires_from_real_accumulated_cost(db, seeded):
+    """Uses the real `estimate_cost` (no stub): large token counts must cross the cap for real."""
+    expensive_response = _response_with(_tool_use(ToolName.GET_SALES_ORDERS, {}))
+    expensive_response = LLMResponse(
+        stop_reason=expensive_response.stop_reason,
+        content=expensive_response.content,
+        input_tokens=0,
+        output_tokens=300_000,  # claude-haiku-4-5 output price ($5/M) -> $1.50, past the $1 cap
+        model="claude-haiku-4-5",
+    )
+    llm = ScriptedClient([expensive_response, expensive_response, expensive_response])
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result == TurnResult(type="error", text=FALLBACK_BUDGET_EXCEEDED, trace_id="abc12345")
+    assert len(llm.calls) == 1
+
+
+def test_a_failing_tool_returns_a_safe_message_never_a_stacktrace(db, seeded):
+    llm = ScriptedClient(
+        [
+            _response_with(_tool_use(ToolName.GET_CLIENT_BALANCE, {"client_id": 999})),
+            _text_response("No encontré a ese cliente."),
+        ]
+    )
+    result = _run(
+        user_message="saldo del cliente 999",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "message"
+    second_call_messages = str(llm.calls[1].messages)
+    assert "Traceback" not in second_call_messages
+
+
+def test_a_leading_text_block_alongside_a_tool_use_block_is_skipped_not_executed(db, seeded):
+    """The model may narrate before proposing a tool; only tool_use blocks are dispatched."""
+    mixed_response = LLMResponse(
+        stop_reason="tool_use",
+        content=[
+            {"type": "text", "text": "Consultando..."},
+            _tool_use(ToolName.GET_SALES_ORDERS, {"limit": 1}),
+        ],
+        input_tokens=10,
+        output_tokens=5,
+        model="claude-haiku-4-5",
+    )
+    llm = ScriptedClient([mixed_response, _text_response("listo")])
+    result = _run(
+        user_message="x",
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+    )
+    assert result.type == "message"
+
+
+def test_a_write_tool_can_never_reach_direct_execution(db) -> None:
+    """Defence in depth: update_order_status always requires confirmation, never runs here."""
+    safe_args = {"order_id": 1, "new_status": "delivered", "reason": "motivo valido"}
+    with pytest.raises(AssertionError):
+        _run_read_tool(ToolName.UPDATE_ORDER_STATUS, safe_args, db)
+
+
+def test_a_confirmation_decision_without_a_change_is_an_invariant_violation() -> None:
+    """Defence in depth: policy must never set requires_confirmation without a change."""
+    bad_decision = PolicyDecision(
+        allowed=True, requires_confirmation=True, reason="ok", change=None
+    )
+    with pytest.raises(AssertionError):
+        _confirmation_result(
+            bad_decision,
+            session_id="s-1",
+            actor="u-1",
+            role="supervisor",
+            tool_name=ToolName.UPDATE_ORDER_STATUS.value,
+            trace_id="abc12345",
+            store=_store(),
+            log_fn=_log,
+        )
+
+
+def test_the_logger_never_receives_raw_user_text(db, seeded):
+    logged: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_log(trace_id: str, event: str, **fields: Any) -> None:
+        logged.append((event, fields))
+
+    llm = ScriptedClient([_text_response("hola")])
+    secret_text = "mi correo es alguien@example.com"
+    _run(
+        user_message=secret_text,
+        role=Role.OPERATOR.value,
+        actor="u-1",
+        session_id="s-1",
+        db=db,
+        llm=llm,
+        trace_id="abc12345",
+        log=fake_log,
+    )
+    user_message_events = [fields for event, fields in logged if event == "user_message"]
+    assert len(user_message_events) == 1
+    assert "chars" in user_message_events[0]
+    assert "sha8" in user_message_events[0]
+    assert all(secret_text not in str(value) for _, fields in logged for value in fields.values())

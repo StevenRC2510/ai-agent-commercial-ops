@@ -52,9 +52,7 @@ def visible_tools_for(role: str) -> frozenset[ToolName]:
 def evaluate(tool_name: str, raw_args: dict, role: str, db: Session) -> PolicyDecision:
     """Decide whether this call may run. The order of checks is significant.
 
-    `tool_name` and `role` arrive as plain strings off the wire; both are converted to their
-    enum here, at the boundary, before anything downstream trusts them.
-    `db` must be a usable session, or `_check_state` raises rather than authorising anything.
+    `tool_name` and `role` are plain strings off the wire, converted to enums here.
     """
     try:
         tool = ToolName(tool_name)

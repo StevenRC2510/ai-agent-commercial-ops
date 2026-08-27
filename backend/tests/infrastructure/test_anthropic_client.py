@@ -11,7 +11,7 @@ import anthropic
 import httpx
 import pytest
 
-from app.infrastructure.llm.anthropic import AnthropicClient
+from app.infrastructure.llm.anthropic import AnthropicClient, UnknownModelError
 
 
 def _request() -> httpx.Request:
@@ -50,6 +50,7 @@ def _fake_message(
     output_tokens: int = 5,
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
+    model: str = "claude-haiku-4-5",
 ) -> MagicMock:
     """A minimal stand-in for `anthropic.types.Message` — only the attributes we read."""
     usage = MagicMock(
@@ -62,7 +63,7 @@ def _fake_message(
         stop_reason="end_turn",
         content=[_FakeBlock({"type": "text", "text": "hola"})],
         usage=usage,
-        model="claude-haiku-4-5",
+        model=model,
     )
     return message
 
@@ -158,6 +159,28 @@ def test_a_successful_call_maps_usage_onto_llm_response(mock_anthropic: MagicMoc
     assert result.cache_read_input_tokens == 80
     assert result.cache_creation_input_tokens == 20
     assert result.model == "claude-haiku-4-5"
+
+
+@patch("anthropic.Anthropic")
+def test_a_dated_wire_model_is_normalized_to_the_bare_id(mock_anthropic: MagicMock) -> None:
+    """The API may echo a resolved, dated id even though we always request a bare one."""
+    mock_sdk_client = mock_anthropic.return_value
+    mock_sdk_client.messages.create.side_effect = [_fake_message(model="claude-haiku-4-5-20251001")]
+
+    result = _client().create(system="s", messages=[], tools=[])
+
+    assert result.model == "claude-haiku-4-5"
+
+
+@patch("anthropic.Anthropic")
+def test_an_unmapped_wire_model_raises_a_named_error_not_a_silent_zero(
+    mock_anthropic: MagicMock,
+) -> None:
+    mock_sdk_client = mock_anthropic.return_value
+    mock_sdk_client.messages.create.side_effect = [_fake_message(model="claude-nonexistent-9")]
+
+    with pytest.raises(UnknownModelError):
+        _client().create(system="s", messages=[], tools=[])
 
 
 @patch("anthropic.Anthropic")

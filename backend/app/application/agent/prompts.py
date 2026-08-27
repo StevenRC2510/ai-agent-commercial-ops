@@ -3,8 +3,7 @@
 Copied verbatim from docs/SPEC-2.md §4 — the Spanish wording is the product, not a placeholder.
 """
 
-# Built by concatenation, one clause per source line, to respect the 100-col limit while
-# keeping the value byte-identical to docs/SPEC-2.md §4 — do not reflow or paraphrase.
+# Byte-identical to docs/SPEC-2.md §4 — do not reflow or paraphrase.
 SYSTEM_PROMPT = (
     "Eres un asistente de operaciones comerciales de una concesionaria automotriz.\n"
     "\n"

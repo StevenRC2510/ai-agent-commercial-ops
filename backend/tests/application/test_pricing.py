@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.infrastructure.llm.pricing import estimate_cost
+from app.application.pricing import estimate_cost
 
 
 def test_haiku_cost_is_exact_decimal() -> None:

@@ -1,15 +1,34 @@
 """The real LLMClient: wraps the official Anthropic SDK."""
 
+import re
 import time
 from typing import Any, cast
 
 import anthropic
 from anthropic.types import MessageParam, ToolParam
 
+from app.application.constants import Model
 from app.application.ports import LLMResponse
 
 _RETRYABLE = (anthropic.APIConnectionError, anthropic.RateLimitError, anthropic.InternalServerError)
 _RETRY_BACKOFF_SECONDS = 1.0  # base delay before the single retry
+_DATE_SUFFIX = re.compile(r"-\d{8}$")
+
+
+class UnknownModelError(RuntimeError):
+    """Raised when the API echoes a model id this client cannot map to `Model`."""
+
+
+def _normalize_model(wire_value: str) -> Model:
+    """Anthropic may echo a resolved, dated id; bare ids are the vocabulary we own."""
+    try:
+        return Model(wire_value)
+    except ValueError:
+        pass
+    try:
+        return Model(_DATE_SUFFIX.sub("", wire_value))
+    except ValueError as exc:
+        raise UnknownModelError(f"Anthropic returned an unmapped model id: {wire_value!r}") from exc
 
 
 class AnthropicClient:
@@ -66,7 +85,7 @@ class AnthropicClient:
             content=[block.model_dump() for block in response.content],
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
+            model=_normalize_model(response.model),
             cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
             cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
-            model=response.model,
         )

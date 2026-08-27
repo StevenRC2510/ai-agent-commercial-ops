@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.application.constants import Model
+
 # Ordered from least to most severe, so error messages list them the way a human would.
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
@@ -41,7 +43,7 @@ class Settings(BaseSettings):
 
     # anthropic_api_key is the project's only real secret: no default beyond empty string.
     anthropic_api_key: str = ""
-    llm_model: str = "claude-haiku-4-5"
+    llm_model: Model = Model.HAIKU_4_5
     llm_temperature: float = 0.0
     llm_timeout_seconds: int = 30
     llm_max_iterations: int = 5

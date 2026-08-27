@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.application.permissions import ToolName
 from app.domain.constants import (
     ALLOWED_TRANSITIONS,
     DEFAULT_ORDER_LIMIT,
@@ -162,7 +163,7 @@ def update_order_status(
         audit_id = record_audit(
             db,
             ctx=ctx,
-            action="update_order_status",
+            action=ToolName.UPDATE_ORDER_STATUS.value,
             args={"order_id": order_id, "new_status": target.value, "reason": reason},
             outcome="executed",
             reason_code="ok",
