@@ -23,6 +23,17 @@ frontend. Las decisiones y sus porqués están en [`docs/adr/`](docs/adr/), y
 [`docs/conversaciones-ejemplo.md`](docs/conversaciones-ejemplo.md) muestra los flujos
 funcionando con transcripciones reales.
 
+![Pantalla inicial del chat, con el selector de rol y tres consultas sugeridas](docs/img/chat-inicio.png)
+
+El rol activo está siempre a la vista porque los permisos son el tema de esta aplicación, y la
+etiqueta ámbar advierte cuando responde el modelo simulado, para que ninguna respuesta de
+demostración se confunda con una del modelo real.
+
+![Una consulta respondida con datos de la base, con su identificador de traza debajo](docs/img/chat-consulta.png)
+
+Bajo cada respuesta va su `trace_id`: con él se reconstruye en los logs la decisión completa
+del turno — qué herramienta se propuso, qué dictaminó la política y qué se ejecutó.
+
 ## Quickstart
 
 ```bash
