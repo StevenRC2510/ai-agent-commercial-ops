@@ -1,9 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
-import type { ReactNode } from "react";
+import type { QueryProviderProps } from "./QueryProvider.types";
 
-// Read retries are safe. Mutation retry policy is decided per mutation —
-// see docs/adr/0006-no-retry-on-confirmation.md.
+// Mutations default to no retry; each opts in deliberately (ADR 0006).
 const client = new QueryClient({
   defaultOptions: {
     queries: { retry: 2, staleTime: 30_000 },
@@ -11,11 +10,11 @@ const client = new QueryClient({
   },
 });
 
-export function QueryProvider({ children }: { children: ReactNode }) {
+export const QueryProvider = ({ children }: QueryProviderProps) => {
   return (
     <QueryClientProvider client={client}>
       {children}
       {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   );
-}
+};

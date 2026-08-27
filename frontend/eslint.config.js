@@ -25,6 +25,23 @@ const noFeatureInternals = {
   message: "Import a feature through its index.ts, not its internals.",
 };
 
+// Error subclasses are exempt: instanceof and stack capture need a real class.
+const noClasses = {
+  selector: "ClassDeclaration[superClass.name!='Error']",
+  message:
+    "No classes. Use arrow functions and factories returning object literals. ErrorBoundary is the only exception, because React offers no hook for componentDidCatch.",
+};
+const noInlineTypes = [
+  {
+    selector: "TSInterfaceDeclaration",
+    message: "Declare types in a sibling *.types.ts file and import them.",
+  },
+  {
+    selector: "TSTypeAliasDeclaration",
+    message: "Declare types in a sibling *.types.ts file and import them.",
+  },
+];
+
 export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
@@ -54,7 +71,27 @@ export default tseslint.config(
       "@typescript-eslint/consistent-type-imports": "error",
       // TypeScript already checks undefined references; ESLint's version does not see ambient/global types (vitest globals) and would false-positive.
       "no-undef": "off",
+      "func-style": ["error", "expression", { allowArrowFunctions: true }],
+      "prefer-arrow-callback": "error",
     },
+  },
+  {
+    // Modern React only, and types live beside the module rather than inside it.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.types.ts", "src/**/*.d.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", noClasses, ...noInlineTypes],
+    },
+  },
+  {
+    // A types file is the declared home for types; it still may not hold a class.
+    files: ["src/**/*.types.ts"],
+    rules: { "no-restricted-syntax": ["error", noClasses] },
+  },
+  {
+    // React provides no hook equivalent for componentDidCatch.
+    files: ["src/app/ErrorBoundary.tsx"],
+    rules: { "no-restricted-syntax": ["error", ...noInlineTypes] },
   },
   {
     // Cross-feature access goes through the public index only — applies everywhere.

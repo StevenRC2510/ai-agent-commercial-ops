@@ -1,18 +1,9 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-interface ErrorBoundaryProps {
-  children: ReactNode;
-}
+import type { ErrorBoundaryProps, ErrorBoundaryState } from "./ErrorBoundary.types";
 
-interface ErrorBoundaryState {
-  hasError: boolean;
-}
-
-/** Renders an explicit Spanish fallback instead of a blank screen on an unhandled render error. */
-export class ErrorBoundary extends Component<
-  ErrorBoundaryProps,
-  ErrorBoundaryState
-> {
+// The only class in the codebase: React offers no hook for componentDidCatch.
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(): ErrorBoundaryState {
@@ -20,11 +11,7 @@ export class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error(
-      "Unhandled error in the frontend tree:",
-      error,
-      info.componentStack,
-    );
+    console.error("Unhandled error in the frontend tree:", error, info.componentStack);
   }
 
   render(): ReactNode {

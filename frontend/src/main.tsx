@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App";
 import { ErrorBoundary } from "@/app/ErrorBoundary";
+import { GatewayProvider } from "@/app/providers/GatewayProvider";
 import { QueryProvider } from "@/app/providers/QueryProvider";
 
 import "./index.css";
@@ -16,7 +17,9 @@ createRoot(rootElement).render(
   <StrictMode>
     <ErrorBoundary>
       <QueryProvider>
-        <App />
+        <GatewayProvider>
+          <App />
+        </GatewayProvider>
       </QueryProvider>
     </ErrorBoundary>
   </StrictMode>,

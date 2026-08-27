@@ -9,11 +9,7 @@ describe("getValidated", () => {
   it("returns the parsed payload when the response matches the schema", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ status: "ok" }), { status: 200 }),
-        ),
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "ok" }), { status: 200 })),
     );
     await expect(getValidated("/health", schema)).resolves.toEqual({
       status: "ok",
@@ -25,20 +21,13 @@ describe("getValidated", () => {
       "fetch",
       vi
         .fn()
-        .mockResolvedValue(
-          new Response(JSON.stringify({ unexpected: true }), { status: 200 }),
-        ),
+        .mockResolvedValue(new Response(JSON.stringify({ unexpected: true }), { status: 200 })),
     );
-    await expect(getValidated("/health", schema)).rejects.toBeInstanceOf(
-      ResponseShapeError,
-    );
+    await expect(getValidated("/health", schema)).rejects.toBeInstanceOf(ResponseShapeError);
   });
 
   it("throws when the response status is not ok", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response("", { status: 503 })),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 503 })));
     await expect(getValidated("/health", schema)).rejects.toThrow();
   });
 });
