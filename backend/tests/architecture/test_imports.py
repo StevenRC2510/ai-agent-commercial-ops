@@ -334,6 +334,18 @@ def test_domain_and_application_never_import_framework_or_transport_libraries() 
             )
 
 
+def test_no_module_under_app_imports_the_eval_harness() -> None:
+    """evals/ composes the whole application, so the arrow may never point back at it."""
+    forbidden = frozenset({"evals"})
+    for path in sorted(_APP_DIR.rglob("*.py")):
+        imported = _imported_module_names(ast.parse(path.read_text()))
+        offending = {name for name in imported if _matches_any_prefix(name, forbidden)}
+        assert not offending, (
+            f"{path.relative_to(_BACKEND_DIR)} imports {offending}: the evaluation harness "
+            "is a caller of the application, never part of it."
+        )
+
+
 def test_policy_and_tools_never_import_the_future_agent_orchestrator() -> None:
     """SPEC-1 §16 criterion 8: the orchestrator module doesn't exist yet, and must stay that way."""
     forbidden = frozenset({_AGENT_ORCHESTRATOR_PREFIX})

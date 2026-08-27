@@ -14,6 +14,8 @@ COPY pytest.ini ./
 COPY pyproject.toml ./
 COPY app ./app
 COPY tests ./tests
+# Baked in so the test suite can import the harness; `make eval` mounts the working tree over it.
+COPY evals ./evals
 
 RUN chown -R appuser:appuser /app
 USER appuser

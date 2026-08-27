@@ -132,6 +132,61 @@ parametriza los 4 estados × 4 estados de `ALLOWED_TRANSITIONS` — no una muest
 completa — porque cualquier transición no cubierta es exactamente el tipo de permiso que un
 supervisor podría ejercer sin que ningún test lo hubiera visto nunca.
 
+## Evaluación del agente
+
+Los tests de comportamiento verifican lógica determinista con `ScriptedClient`. La suite de
+`backend/evals/` mide otra cosa: **el modelo real**. Son 15 casos en
+`backend/evals/cases.yaml`, anclados en los datos del seed
+(`backend/app/infrastructure/seed_constants.py`), repartidos en seis categorías: selección de
+herramienta (5), ambigüedad (2), autorización (2), inyección de prompt (2), grounding (2) y
+confirmación (2).
+
+```bash
+make eval                                        # el modelo de LLM_MODEL
+make eval EVAL_ARGS="--model claude-sonnet-5"    # otro modelo, para la tabla comparativa
+```
+
+**Qué necesita:** `DEMO_MODE=false`, una `ANTHROPIC_API_KEY` con saldo, y red. Cuesta dinero,
+así que **no corre en CI**. Escribe filas de auditoría (los rechazos se auditan) y ninguna
+orden cambia de estado, pero conviene `make reset` después para dejar la demo repetible.
+
+**Qué no hace:** caer al cliente falso. Si falta la clave o `DEMO_MODE` está activo, se planta
+y explica por qué, en vez de puntuar nuestro propio matcher de palabras clave y llamarlo
+resultado (`backend/evals/preflight.py`):
+
+```
+make eval cannot run:
+  - DEMO_MODE is on, so the fake client would answer every case. Scoring it would
+    measure our own keyword matcher, not a model. Set DEMO_MODE=false.
+
+No cases were run and no results were produced. This suite measures the real model on
+purpose: it needs DEMO_MODE=false, a funded ANTHROPIC_API_KEY, and network access.
+```
+
+**Cómo puntúa.** Nunca compara la prosa del modelo contra un texto fijo: un modelo que dice lo
+correcto con otras palabras pasa. Cada aserción mira un hecho observable — qué herramienta se
+propuso y con qué argumentos, el `type` del turno, el `reason_code` de la política, el estado
+de la orden en la base antes y después, y las filas de `audit_log` de ese `trace_id`. El único
+número que se compara contra el texto es una cifra de dinero, y el valor esperado se lee de la
+base en tiempo de ejecución, no está escrito en el fichero de casos
+(`backend/evals/scoring.py`).
+
+**Resultados medidos: ninguno todavía.** La cuenta de Anthropic del proyecto tiene saldo cero.
+Ni siquiera `/v1/messages/count_tokens` responde:
+
+```
+HTTP 400 — "Your credit balance is too low to access the Anthropic API."
+```
+
+El arnés, los 15 casos, la puntuación y el reporte están construidos y probados; la tabla
+comparativa de modelos que pide `docs/SPEC-2.md` §5.2 y el reporte de §11.1 quedan **vacíos a
+propósito**. Aquí no hay ninguna cifra estimada ni ningún placeholder: cuando falta un número,
+es que nadie lo midió.
+
+Los 117 tests de `backend/tests/evals/` prueban el arnés — la aritmética del resumen, la carga
+del fichero de casos, el renderizado y la negativa a arrancar sin clave — con dobles, y están
+etiquetados como tests del arnés en su docstring. No son resultados de evaluación.
+
 ## Limitaciones
 
 Las limitaciones conocidas, las ambigüedades resueltas y las abstracciones deliberadamente no

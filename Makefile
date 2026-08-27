@@ -30,9 +30,9 @@ test: _sync
 	fi
 
 lint: _sync
-	docker compose exec -T backend ruff check app tests scripts
-	docker compose exec -T backend ruff format --check app tests scripts
-	docker compose exec -T backend mypy app scripts
+	docker compose exec -T backend ruff check app tests scripts evals
+	docker compose exec -T backend ruff format --check app tests scripts evals
+	docker compose exec -T backend mypy app scripts evals
 	@if [ -d frontend ]; then \
 		cd frontend && npx prettier --check src && npm run lint && npx tsc --noEmit; \
 	else \
@@ -40,8 +40,8 @@ lint: _sync
 	fi
 
 format: _sync
-	docker compose exec -T backend ruff check --fix app tests scripts
-	docker compose exec -T backend ruff format app tests scripts
+	docker compose exec -T backend ruff check --fix app tests scripts evals
+	docker compose exec -T backend ruff format app tests scripts evals
 	@if [ -d frontend ]; then \
 		cd frontend && npx prettier --write src; \
 	else \
