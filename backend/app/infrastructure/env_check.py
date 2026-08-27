@@ -1,13 +1,6 @@
 """Validates the environment before the app or its tests run.
 
-Lives in infrastructure because it is a startup-time check of external
-configuration, next to db.py and obs.py, which read the same Settings object.
-
-Every check here is derived from app.config.Settings — the pydantic-settings
-model already IS the contract, so this module never keeps its own list of
-variable names to drift out of sync with it.
-
-Run with: python -m app.infrastructure.env_check
+Every check derives from app.config.Settings; run via `python -m app.infrastructure.env_check`.
 """
 
 import sys
@@ -29,10 +22,7 @@ def _pydantic_problems(exc: ValidationError) -> list[str]:
 def find_problems() -> list[str]:
     """Return every configuration problem found; an empty list means it is valid.
 
-    Imports Settings inside the try, not at module load: app/config.py builds its
-    module-level `settings` singleton as soon as it is imported, so on a broken
-    environment the very first import of it raises here too — where it is caught
-    and turned into a friendly message instead of crashing with a raw traceback.
+    Imports Settings inside the try so a broken environment raises here, not at module import time.
     """
     try:
         from app.config import Settings

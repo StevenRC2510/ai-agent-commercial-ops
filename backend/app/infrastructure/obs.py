@@ -115,15 +115,7 @@ def log(
 ) -> None:
     """Emit one structured event.
 
-    This function performs no redaction: callers alone are responsible for never
-    passing a secret or raw user-facing text as a field value (e.g. log a length
-    and a short hash instead of the raw string).
-
-    Raises:
-        ValueError: if a field name collides with a reserved ``LogRecord``
-            attribute (e.g. ``name``, ``module``). Checked unconditionally, before
-            the record is built, so the error is raised the same way regardless of
-            the configured log level - never only once someone lowers it to DEBUG.
+    Never pass a secret or raw user text as a field value - log a length and a short hash instead.
     """
     for key in fields:
         if key in _RESERVED:

@@ -1,14 +1,6 @@
-"""Test fixtures.
-
-Two database fixtures exist on purpose:
-
-  db       savepoint-isolated; fast; used by almost every test
-  db_real  a real top-level transaction; used only by tests that assert on
-           transactional behaviour, which cannot be observed from inside
-           another transaction
-
-Never request both fixtures in the same test: db_real's TRUNCATE needs an ACCESS
-EXCLUSIVE lock and would block against db's still-open transaction on the same tables.
+"""Test fixtures: `db` is savepoint-isolated and fast, for almost every test;
+`db_real` uses a real transaction, for tests that must observe transactional
+behaviour a savepoint would hide. Never request both in the same test.
 """
 
 import pytest
@@ -42,9 +34,7 @@ def engine():
 def db(engine):
     """Session bound to an outer transaction that is always rolled back.
 
-    join_transaction_mode="create_savepoint" means the code under test may
-    call commit() and rollback() freely: those act on a SAVEPOINT, never on
-    the fixture's own transaction.
+    `create_savepoint` mode makes commit()/rollback() act on a SAVEPOINT, not the outer one.
     """
     connection = engine.connect()
     outer = connection.begin()

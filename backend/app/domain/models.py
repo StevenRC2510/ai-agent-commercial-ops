@@ -1,7 +1,6 @@
 """SQLAlchemy declarative entities.
 
-The domain layer is persistence-aware by deliberate decision — see
-docs/adr/0005-persistence-aware-domain-models.md.
+Persistence-aware domain by design - see docs/adr/0005-persistence-aware-domain-models.md.
 """
 
 from datetime import UTC, date, datetime
@@ -63,8 +62,7 @@ class Payment(Base):
 class AuditLog(Base):
     """Append-only record of every write and every denial.
 
-    Immutable by convention in this phase; production would enforce it with
-    append-only database grants.
+    Immutable by convention only in this phase, not yet by database grants.
     """
 
     __tablename__ = "audit_logs"

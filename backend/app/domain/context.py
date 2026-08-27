@@ -7,8 +7,7 @@ from dataclasses import dataclass
 class AuditContext:
     """Who is acting and under which trace, for audit records only.
 
-    Never used to make an authorization decision — that is the execution
-    layer's responsibility, based on its own permission checks.
+    Never used for authorization decisions - that is the policy layer's job.
     """
 
     actor: str

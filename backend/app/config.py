@@ -1,12 +1,5 @@
-"""Application settings.
-
-Every setting has a default so the stack boots on a clean clone with no .env.
-A value may have a default only if it is not a secret; this phase has none.
-
-The field validators below are the checks the type system (plain `str`) cannot
-express on its own. They run every time Settings is built, so both the running
-app and app/infrastructure/env_check.py share one definition of "valid" instead
-of the script keeping its own copy that could drift.
+"""Application settings: every field has a default (none are secrets yet); field
+validators enforce what plain `str` typing cannot, shared with env_check.py.
 """
 
 from datetime import date

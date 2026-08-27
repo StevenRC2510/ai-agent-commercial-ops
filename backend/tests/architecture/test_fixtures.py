@@ -1,7 +1,6 @@
 """Proves the fixtures isolate. If these pass vacuously, every other test lies.
 
-Order-dependent by design: each test asserts on what the previous one left behind —
-do not shuffle this file.
+Order-dependent: each test asserts on what the previous one left behind - do not shuffle.
 """
 
 from decimal import Decimal

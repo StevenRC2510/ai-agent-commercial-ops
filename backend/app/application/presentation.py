@@ -1,7 +1,6 @@
 """PRESENTATION — the only place the Spanish text a human reads gets built.
 
-policy.py decides; this module renders. Import only app.domain — never
-app.application.policy — so the decision layer stays independent of prose.
+Imports only app.domain, never policy: rendering stays independent of decisions.
 """
 
 _DENIAL_TEXTS: dict[str, str] = {
@@ -21,7 +20,6 @@ def render_denial(reason: str) -> str:
 def denial_texts() -> dict[str, str]:
     """The complete map of denial reason codes to their Spanish messages.
 
-    Exists so a test can assert this set matches policy.DenialReason exactly, without
-    presentation.py importing anything from policy — the test does the bridging instead.
+    Exists so a test can assert this matches policy.DenialReason without an import.
     """
     return dict(_DENIAL_TEXTS)

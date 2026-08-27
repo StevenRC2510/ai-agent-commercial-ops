@@ -1,7 +1,6 @@
 """POLICY — decides what is allowed. Never renders text, never calls a model.
 
-Import whitelist, enforced by tests/architecture/test_imports.py: dataclasses, enum, types,
-typing, pydantic, sqlalchemy, app.application.permissions, app.application.tool_args, app.domain.*
+Import whitelist enforced by tests/architecture/test_imports.py.
 """
 
 from dataclasses import dataclass
@@ -46,9 +45,7 @@ def _deny(reason: DenialReason) -> PolicyDecision:
 def visible_tools_for(role: str) -> frozenset[str]:
     """Tools that will be declared to the model for this role.
 
-    Defence in depth: this shrinks the attack surface and saves tokens, but
-    evaluate() validates every call regardless — hiding a tool fails open if the
-    model hallucinates a name, evaluate() fails closed.
+    Defence in depth: evaluate() re-validates every call, so hiding a tool here fails open.
     """
     return ROLE_PERMISSIONS.get(role, frozenset())
 
@@ -56,8 +53,7 @@ def visible_tools_for(role: str) -> frozenset[str]:
 def evaluate(tool_name: str, raw_args: dict, role: str, db: Session) -> PolicyDecision:
     """Decide whether this call may run. The order of checks is significant.
 
-    `db` must be a usable session: if it is mid a failed transaction, `_check_state` raises
-    rather than authorising anything.
+    `db` must be a usable session, or `_check_state` raises rather than authorising anything.
     """
     schema = TOOL_SCHEMAS.get(tool_name)
     if schema is None:

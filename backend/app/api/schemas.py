@@ -1,7 +1,6 @@
 """HTTP request and response contracts.
 
-Deliberately separate from the argument schemas in application/policy.py:
-this is the public API surface, those validate what a model proposes.
+Separate from application/policy.py schemas: this is the public API, those validate model calls.
 """
 
 from pydantic import BaseModel
