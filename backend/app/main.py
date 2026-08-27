@@ -9,13 +9,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import health
 from app.config import settings
 from app.infrastructure import obs
-from app.infrastructure.db import create_schema
+from app.infrastructure.db import SessionLocal, create_schema
+from app.infrastructure.seed import seed_if_empty
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     obs.configure_logging()
     create_schema()
+    with SessionLocal() as session:
+        seeded = seed_if_empty(session)
+    obs.log(obs.new_trace_id(), "seed_completed", seeded=seeded)
     obs.log(obs.new_trace_id(), "app_start")
     yield
 
